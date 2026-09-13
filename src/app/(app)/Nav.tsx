@@ -12,7 +12,7 @@ const GROUPS: Group[] = [
   {
     items: [
       { href: '/', label: '대시보드', icon: '📊' },
-      { href: '/funds', label: '자금현황', icon: '💰', soon: true },
+      { href: '/funds', label: '자금현황', icon: '💰' },
     ],
   },
   {
@@ -25,8 +25,8 @@ const GROUPS: Group[] = [
   {
     title: '자금',
     items: [
-      { href: '/remittances', label: '해외송금', icon: '🌏', soon: true },
-      { href: '/transfers', label: '내부 자금이동', icon: '🔁', soon: true },
+      { href: '/remittances', label: '해외송금', icon: '🌏' },
+      { href: '/transfers', label: '내부 자금이동', icon: '🔁' },
       { href: '/invoices', label: '세금계산서', icon: '🧾', soon: true },
     ],
   },

@@ -13,9 +13,10 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "db:guards": "npm run db:sql",
-    "verify": "tsx scripts/verify.ts && tsx scripts/verify-phase2.ts",
+    "verify": "tsx scripts/verify.ts && tsx scripts/verify-phase2.ts && tsx scripts/verify-phase3.ts",
     "smoke": "node scripts/smoke.mjs",
-    "db:sql": "for f in prisma/sql/*.sql; do psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f \"$f\" >/dev/null; done && echo 'SQL 보호장치·채번 적용 완료'"
+    "db:sql": "for f in prisma/sql/*.sql; do psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f \"$f\" >/dev/null; done && echo 'SQL 보호장치·채번 적용 완료'",
+    "db:purge-test": "tsx scripts/purge-test-data.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.2.1",
