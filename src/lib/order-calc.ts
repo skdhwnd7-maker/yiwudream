@@ -75,27 +75,23 @@ const emptyCosts = (): Record<CostKey, Prisma.Decimal> =>
 const pick = (currency: Currency, krw: Prisma.Decimal | null, cny: Prisma.Decimal | null): Prisma.Decimal =>
   currency === 'CNY' ? (cny ?? zero()) : (krw ?? zero())
 
-export async function summarizeOrder(orderId: bigint, tx: Tx = prisma): Promise<OrderSummary> {
-  const order = await tx.order.findUniqueOrThrow({
-    where: { id: orderId },
-    include: { dealType: true },
-  })
-  const currency = order.settlementCurrency
-  const basis = order.dealType.revenueBasis
+/** 계산에 실제로 필요한 것만. 한 건씩 읽든 여러 건을 한 번에 읽든 이 모양으로 맞춘다 */
+interface SummaryInput {
+  currency: Currency
+  basis: RevenueBasis
+  receipts: { amountKrw: Prisma.Decimal; amountCny: Prisma.Decimal | null
+    splits: { splitKind: string; amountKrw: Prisma.Decimal | null; amountCny: Prisma.Decimal | null }[] }[]
+  allocs: { allocKrw: Prisma.Decimal | null; allocCny: Prisma.Decimal | null; categoryCode: string }[]
+  remitAllocs: { allocKrw: Prisma.Decimal; allocCny: Prisma.Decimal | null }[]
+}
 
-  const [receipts, allocs, remitAllocs] = await Promise.all([
-    tx.receipt.findMany({
-      where: { orderId, isVoid: false },
-      include: { splits: true },
-    }),
-    tx.expenseAllocation.findMany({
-      where: { orderId, expense: { isVoid: false } },
-      include: { expense: { include: { category: true } } },
-    }),
-    tx.remittanceAllocation.findMany({
-      where: { orderId, remittance: { isVoid: false, status: { in: ['SENT', 'ARRIVED'] } } },
-    }),
-  ])
+/**
+ * 주문 하나의 숫자를 낸다. DB 를 건드리지 않는 순수 계산이다.
+ * 화면 한 건 조회(summarizeOrder)와 대시보드 일괄 집계(summarizeOrders)가 같은 함수를 써야
+ * 「주문 상세의 마진」 과 「대시보드의 마진」 이 어긋나지 않는다.
+ */
+function computeSummary(orderId: bigint, input: SummaryInput): OrderSummary {
+  const { currency, basis, receipts, allocs, remitAllocs } = input
 
   let grossIn = zero(), salesIn = zero(), feeIn = zero(), vatIn = zero()
   let depGoods = zero(), depGeneral = zero()
@@ -118,7 +114,7 @@ export async function summarizeOrder(orderId: bigint, tx: Tx = prisma): Promise<
 
   for (const a of allocs) {
     const v = pick(currency, a.allocKrw, a.allocCny)
-    const code = a.expense.category.code
+    const code = a.categoryCode
     const group = COST_GROUPS.find((g) => (g.codes as readonly string[]).includes(code))
     const key: CostKey = group?.key ?? 'etc'
     costs[key] = costs[key].plus(v)
@@ -167,6 +163,100 @@ export async function summarizeOrder(orderId: bigint, tx: Tx = prisma): Promise<
     remitPending: remitPending.gt(0) ? remitPending : zero(),
     remitStatus,
   }
+}
+
+/** 주문 한 건 — 화면에서 쓴다 */
+export async function summarizeOrder(orderId: bigint, tx: Tx = prisma): Promise<OrderSummary> {
+  const order = await tx.order.findUniqueOrThrow({
+    where: { id: orderId },
+    include: { dealType: true },
+  })
+  const [receipts, allocs, remitAllocs] = await Promise.all([
+    tx.receipt.findMany({ where: { orderId, isVoid: false }, include: { splits: true } }),
+    tx.expenseAllocation.findMany({
+      where: { orderId, expense: { isVoid: false } },
+      include: { expense: { include: { category: { select: { code: true } } } } },
+    }),
+    tx.remittanceAllocation.findMany({
+      where: { orderId, remittance: { isVoid: false, status: { in: ['SENT', 'ARRIVED'] } } },
+    }),
+  ])
+  return computeSummary(orderId, {
+    currency: order.settlementCurrency,
+    basis: order.dealType.revenueBasis,
+    receipts,
+    allocs: allocs.map((a) => ({
+      allocKrw: a.allocKrw, allocCny: a.allocCny, categoryCode: a.expense.category.code,
+    })),
+    remitAllocs,
+  })
+}
+
+/**
+ * 주문 여러 건을 한 번에 — 대시보드·리포트에서 쓴다.
+ *
+ * 한 건씩 부르면 주문 수만큼 질의가 나간다. 실제 자료(주문 733건)에서 대시보드가
+ * 6.7초 걸리던 이유다. 필요한 것을 세 번에 나눠 읽고 메모리에서 묶는다.
+ */
+export async function summarizeOrders(
+  orderIds: bigint[], tx: Tx = prisma,
+): Promise<Map<string, OrderSummary>> {
+  const out = new Map<string, OrderSummary>()
+  if (orderIds.length === 0) return out
+
+  const [orders, receipts, allocs, remitAllocs] = await Promise.all([
+    tx.order.findMany({
+      where: { id: { in: orderIds } },
+      select: { id: true, settlementCurrency: true, dealType: { select: { revenueBasis: true } } },
+    }),
+    tx.receipt.findMany({
+      where: { orderId: { in: orderIds }, isVoid: false },
+      select: { orderId: true, amountKrw: true, amountCny: true, splits: true },
+    }),
+    tx.expenseAllocation.findMany({
+      where: { orderId: { in: orderIds }, expense: { isVoid: false } },
+      select: {
+        orderId: true, allocKrw: true, allocCny: true,
+        expense: { select: { category: { select: { code: true } } } },
+      },
+    }),
+    tx.remittanceAllocation.findMany({
+      where: {
+        orderId: { in: orderIds },
+        remittance: { isVoid: false, status: { in: ['SENT', 'ARRIVED'] } },
+      },
+      select: { orderId: true, allocKrw: true, allocCny: true },
+    }),
+  ])
+
+  const group = <T extends { orderId: bigint | null }>(rows: T[]) => {
+    const m = new Map<string, T[]>()
+    for (const r of rows) {
+      if (r.orderId === null) continue
+      const k = r.orderId.toString()
+      const arr = m.get(k)
+      if (arr) arr.push(r)
+      else m.set(k, [r])
+    }
+    return m
+  }
+  const rByOrder = group(receipts)
+  const aByOrder = group(allocs)
+  const mByOrder = group(remitAllocs)
+
+  for (const o of orders) {
+    const k = o.id.toString()
+    out.set(k, computeSummary(o.id, {
+      currency: o.settlementCurrency,
+      basis: o.dealType.revenueBasis,
+      receipts: rByOrder.get(k) ?? [],
+      allocs: (aByOrder.get(k) ?? []).map((a) => ({
+        allocKrw: a.allocKrw, allocCny: a.allocCny, categoryCode: a.expense.category.code,
+      })),
+      remitAllocs: mByOrder.get(k) ?? [],
+    }))
+  }
+  return out
 }
 
 /**

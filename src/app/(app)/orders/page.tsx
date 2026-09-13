@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { OrderStatus, Route } from '@prisma/client'
 import { requireUser } from '@/lib/session-guard'
 import { prisma } from '@/lib/db'
-import { summarizeOrder } from '@/lib/order-calc'
+import { summarizeOrders } from '@/lib/order-calc'
 import { fmtKrw, fmtCny, fmtPercent, D } from '@/lib/money'
 import { fmtDate } from '@/lib/serialize'
 import { ROUTE_LABEL, ORDER_STATUS_LABEL } from '@/lib/labels'
@@ -57,7 +57,8 @@ export default async function OrdersPage({
     prisma.partner.count({ where: { isActive: true, isInternal: false } }),
   ])
 
-  const summaries = await Promise.all(orders.map((o) => summarizeOrder(o.id)))
+  const summaryMap = await summarizeOrders(orders.map((o) => o.id))
+  const summaries = orders.map((o) => summaryMap.get(o.id.toString())!)
 
   // 합계 — 통화가 섞이므로 KRW 환산 기준으로 낸다
   let sumRevenueKrw = D(0), sumCostKrw = D(0), sumMarginKrw = D(0)

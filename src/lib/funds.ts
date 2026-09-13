@@ -227,20 +227,23 @@ export async function fundsSnapshot(asOf?: Date): Promise<FundsSnapshot> {
 
 /** 미수금 — 진행중 주문에서 회사부담 비용이 매출인식액을 넘은 금액 */
 export async function listReceivables(): Promise<Receivable[]> {
-  const { summarizeOrder } = await import('./order-calc')
+  const { summarizeOrders } = await import('./order-calc')
   const orders = await prisma.order.findMany({
     where: { status: 'OPEN', isVoid: false },
     include: { partner: { select: { id: true, name: true, defaultMarkupRate: true } } },
     orderBy: { orderDate: 'asc' },
   })
 
-  const fx = await latestFxRate()
+  const [fx, summaries] = await Promise.all([
+    latestFxRate(),
+    summarizeOrders(orders.map((o) => o.id)),
+  ])
   const out: Receivable[] = []
   const now = Date.now()
 
   for (const o of orders) {
-    const s = await summarizeOrder(o.id)
-    if (s.receivable.lte(0)) continue
+    const s = summaries.get(o.id.toString())
+    if (!s || s.receivable.lte(0)) continue
 
     const amountKrw =
       o.settlementCurrency === 'KRW'
@@ -283,7 +286,7 @@ export interface RemitPendingRow {
 }
 
 export async function listRemitPending(includeDone = false): Promise<RemitPendingRow[]> {
-  const { summarizeOrder } = await import('./order-calc')
+  const { summarizeOrders } = await import('./order-calc')
   const orders = await prisma.order.findMany({
     where: {
       isVoid: false,
@@ -293,10 +296,11 @@ export async function listRemitPending(includeDone = false): Promise<RemitPendin
     orderBy: { orderDate: 'asc' },
   })
 
+  const summaries = await summarizeOrders(orders.map((o) => o.id))
   const out: RemitPendingRow[] = []
   for (const o of orders) {
-    const s = await summarizeOrder(o.id)
-    if (s.depositGoodsIn.lte(0)) continue
+    const s = summaries.get(o.id.toString())
+    if (!s || s.depositGoodsIn.lte(0)) continue
     if (!includeDone && s.remitStatus === 'DONE') continue
     out.push({
       orderId: o.id.toString(), orderNo: o.orderNo,

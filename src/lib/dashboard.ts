@@ -9,7 +9,7 @@
  */
 import { Prisma, type Route } from '@prisma/client'
 import { prisma } from './db'
-import { summarizeOrder } from './order-calc'
+import { summarizeOrders } from './order-calc'
 import { fundsSnapshot, latestFxRate } from './funds'
 import { D } from './money'
 
@@ -115,8 +115,11 @@ async function aggregateOrders(from: Date, to: Date, fx: Prisma.Decimal | null) 
   let totalRevenue = zero(), totalCost = zero(), margin = zero(), customsRev = zero()
   let unbilledCost = zero(), unbilledCount = 0
 
+  const summaries = await summarizeOrders(orders.map((o) => o.id))
+
   for (const o of orders) {
-    const s = await summarizeOrder(o.id)
+    const s = summaries.get(o.id.toString())
+    if (!s) continue
     // CNY 정산 주문은 KRW로 환산해 합산한다. 환율이 없으면 0으로 두고 화면에서 알린다.
     const toKrw = (v: Prisma.Decimal) =>
       o.settlementCurrency === 'KRW' ? v : fx ? v.mul(fx) : zero()
