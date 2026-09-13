@@ -1,0 +1,794 @@
+// 이우드림무역 자금·정산 관리 시스템
+// 설계 문서: docs/03-데이터베이스설계.md
+//
+// 금액은 전부 Decimal(18,2). 부동소수점 금지.
+// 환율은 Decimal(18,6). 전표마다 저장하며 수식에 숨기지 않는다.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 열거형
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  OWNER // 대표
+  MANAGER // 매니저
+  STAFF // 직원
+  VIEWER // 조회만
+}
+
+enum Entity {
+  KR // 한국 이우드림무역
+  CN // 중국법인
+}
+
+enum Route {
+  OVERSEAS // 해외송금 (중국법인 직수취)
+  BANK_GEN // 일반통장
+  BANK_CORP // 법인통장
+  SITE // 사이트 결제
+  CASH // 현금
+  OTHER
+}
+
+enum Currency {
+  KRW
+  CNY
+  USD
+}
+
+enum CostType {
+  ORDER_COST // 주문 원가
+  OPERATING // 운영비
+  BOTH
+}
+
+enum RevenueBasis {
+  GROSS // 총액매출
+  NET // 순액 (수수료만)
+}
+
+enum InvoiceBase {
+  NONE
+  TOTAL_RECEIPT
+  FEE_ONLY
+  CUSTOMS_ONLY
+  MARGIN
+  MANUAL
+}
+
+enum VatMode {
+  INCLUDED // 부가세 포함
+  EXCLUDED // 부가세 별도
+  EXEMPT // 면세
+  ZERO // 영세율
+  NONE // 부가세 무관
+}
+
+enum Rounding {
+  ROUND
+  FLOOR
+  CEIL
+}
+
+enum OrderStatus {
+  OPEN // 진행중
+  SETTLED // 정산완료
+  CANCELLED // 취소
+}
+
+enum InvoiceStatus {
+  NONE // 발행 대상 아님
+  PENDING // 발행예정
+  ISSUED // 발행완료
+  CANCELLED
+}
+
+enum ReceiptSource {
+  DIRECT // 계좌 직접입금
+  FROM_DEPOSIT // 예치금에서 충당
+}
+
+/// 입금 분해 — 이 설계의 핵심. 들어온 돈이 "누구 돈인지"로 나눈다.
+enum SplitKind {
+  SALES // 상품·용역 공급가액 — 회사 돈
+  FEE // 구매대행 수수료 공급가액 — 회사 돈
+  VAT // 받은 부가세 — 국세청 돈
+  DEPOSIT_GOODS // 상품구매 예치금 — 고객 돈 (송금대기 대상)
+  DEPOSIT_GENERAL // 용도미지정 예치금 — 고객 돈
+}
+
+enum DepositKind {
+  GOODS_FUND // 상품구매자금 (송금대기 대상)
+  GENERAL // 용도미지정
+}
+
+enum DepositMovement {
+  IN_RECEIPT // 입금으로 증가 (+)
+  USE_ORDER // 주문 정산 충당 (−)
+  USE_REMIT // 해외송금 집행 (−)
+  REFUND // 반환 (−)
+  ADJUST // 조정 (±) — 사유 필수
+}
+
+enum PaymentStatus {
+  PLANNED // 지급예정 (미지급금)
+  PAID // 지급완료
+}
+
+enum RemitStatus {
+  DRAFT
+  SENT
+  ARRIVED
+  CANCELLED
+}
+
+enum FxSource {
+  MANUAL // 직접 입력
+  PARSED // 엑셀 수식에서 추출
+  REF // 참고환율 사용
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  VOID
+  RESTORE
+  SETTLE
+  UNLOCK
+  IMPORT
+  LOGIN
+  LOGOUT
+  EXPORT
+}
+
+enum ImportStatus {
+  UPLOADED
+  MAPPED
+  VALIDATED
+  COMMITTED
+  ROLLED_BACK
+}
+
+enum ImportRowStatus {
+  OK
+  WARN
+  ERROR
+  SKIP
+  HOLD
+}
+
+// ─────────────────────────────────────────────────────────────
+// 기준정보
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id           BigInt    @id @default(autoincrement())
+  loginId      String    @unique @map("login_id") @db.VarChar(50)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  name         String    @db.VarChar(50)
+  role         Role      @default(STAFF)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+model Partner {
+  id                BigInt   @id @default(autoincrement())
+  code              String   @unique @db.VarChar(20)
+  name              String   @db.VarChar(100)
+  /// 공백·기호 제거 정규화 키 (중복 탐지용)
+  nameNormalized    String   @map("name_normalized") @db.VarChar(100)
+  bizNo             String?  @map("biz_no") @db.VarChar(20)
+  ceoName           String?  @map("ceo_name") @db.VarChar(50)
+  contact           String?  @db.VarChar(50)
+  phone             String?  @db.VarChar(30)
+  email             String?  @db.VarChar(100)
+  defaultRoute      Route?   @map("default_route")
+  defaultDealTypeId BigInt?  @map("default_deal_type_id")
+  taxInvoiceDefault Boolean  @default(false) @map("tax_invoice_default")
+  /// 사이트 루트 기본 수수료율(%)
+  defaultFeeRate    Decimal? @map("default_fee_rate") @db.Decimal(7, 4)
+  /// 지출 대비 마크업율(%) — 에이스처럼 원가+α로 청구하는 거래처
+  defaultMarkupRate Decimal? @map("default_markup_rate") @db.Decimal(7, 4)
+  /// 이우드림 같은 자기 회사 계정. 매출·마진 집계에서 제외한다.
+  isInternal        Boolean  @default(false) @map("is_internal")
+  isActive          Boolean  @default(true) @map("is_active")
+  memo              String?
+  createdBy         BigInt   @map("created_by")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedBy         BigInt?  @map("updated_by")
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  defaultDealType DealType?              @relation(fields: [defaultDealTypeId], references: [id])
+  aliases         PartnerAlias[]
+  orders          Order[]
+  receipts        Receipt[]
+  expenses        Expense[]
+  depositLedger   DepositLedger[]
+  invoices        Invoice[]
+  remitAllocs     RemittanceAllocation[]
+
+  @@index([nameNormalized])
+  @@index([isActive, name])
+  @@map("partners")
+}
+
+/// 거래처명 표기 흔들림 흡수 (코러스 코리아 / 코러스코리아 등 16그룹)
+model PartnerAlias {
+  id              BigInt   @id @default(autoincrement())
+  partnerId       BigInt   @map("partner_id")
+  alias           String   @db.VarChar(100)
+  /// 정규화 키 — 조회용
+  aliasNormalized String   @map("alias_normalized") @db.VarChar(100)
+  source          String   @default("MANUAL") @db.VarChar(20) // IMPORT | MANUAL
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  partner Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+
+  @@unique([alias])
+  @@index([aliasNormalized])
+  @@map("partner_aliases")
+}
+
+model Account {
+  id             BigInt    @id @default(autoincrement())
+  name           String    @db.VarChar(50)
+  entity         Entity
+  route          Route
+  currency       Currency
+  bankName       String?   @map("bank_name") @db.VarChar(50)
+  accountNo      String?   @map("account_no") @db.VarChar(50)
+  openingBalance Decimal   @default(0) @map("opening_balance") @db.Decimal(18, 2)
+  openingDate    DateTime? @map("opening_date") @db.Date
+  isActive       Boolean   @default(true) @map("is_active")
+  memo           String?
+  createdBy      BigInt    @map("created_by")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedBy      BigInt?   @map("updated_by")
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  receipts     Receipt[]
+  expenses     Expense[]
+  remitFrom    Remittance[]       @relation("RemitFrom")
+  remitTo      Remittance[]       @relation("RemitTo")
+  transferFrom InternalTransfer[] @relation("TransferFrom")
+  transferTo   InternalTransfer[] @relation("TransferTo")
+
+  @@index([entity, isActive])
+  @@map("accounts")
+}
+
+model ExpenseCategory {
+  id              BigInt   @id @default(autoincrement())
+  code            String   @unique @db.VarChar(20)
+  name            String   @db.VarChar(50)
+  costType        CostType @map("cost_type")
+  defaultEntity   Entity   @default(CN) @map("default_entity")
+  defaultCurrency Currency @default(CNY) @map("default_currency")
+  sortOrder       Int      @default(0) @map("sort_order")
+  isActive        Boolean  @default(true) @map("is_active")
+
+  expenses Expense[]
+
+  @@map("expense_categories")
+}
+
+/// 거래유형 — 세무 규칙을 코드가 아니라 설정으로 관리한다.
+model DealType {
+  id              BigInt       @id @default(autoincrement())
+  code            String       @unique @db.VarChar(30)
+  name            String       @db.VarChar(50)
+  revenueBasis    RevenueBasis @map("revenue_basis")
+  invoiceBase     InvoiceBase  @map("invoice_base")
+  /// 이 유형의 거래가 기본적으로 세금계산서 발행 대상인지
+  invoiceDefault  Boolean      @default(false) @map("invoice_default")
+  vatMode         VatMode      @map("vat_mode")
+  vatRate         Decimal      @default("0.10") @map("vat_rate") @db.Decimal(5, 4)
+  rounding        Rounding     @default(FLOOR)
+  /// 회계분류 — 거래형태와 독립적으로 기록
+  accountingClass String       @map("accounting_class") @db.VarChar(30)
+  defaultRoute    Route?       @map("default_route")
+  sortOrder       Int          @default(0) @map("sort_order")
+  isActive        Boolean      @default(true) @map("is_active")
+  memo            String?
+
+  partners Partner[]
+  orders   Order[]
+  invoices Invoice[]
+
+  @@map("deal_types")
+}
+
+model Setting {
+  key         String  @id @db.VarChar(50)
+  value       String
+  valueType   String  @default("string") @map("value_type") @db.VarChar(20)
+  description String?
+
+  @@map("settings")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 거래 원장
+// ─────────────────────────────────────────────────────────────
+
+model Order {
+  id                 BigInt        @id @default(autoincrement())
+  orderNo            String        @unique @map("order_no") @db.VarChar(20)
+  /// 기존 관리번호 — 아르미르샵133 등 엑셀 원문 보존
+  externalRef        String?       @map("external_ref") @db.VarChar(50)
+  partnerId          BigInt        @map("partner_id")
+  route              Route
+  dealTypeId         BigInt        @map("deal_type_id")
+  accountingClass    String        @map("accounting_class") @db.VarChar(30)
+  entity             Entity
+  settlementCurrency Currency      @map("settlement_currency")
+  title              String?       @db.VarChar(200)
+  orderDate          DateTime      @map("order_date") @db.Date
+  /// 엑셀 이관 시 일자를 직전 행에서 물려받은 경우 true
+  orderDateEstimated Boolean       @default(false) @map("order_date_estimated")
+  status             OrderStatus   @default(OPEN)
+  settledAt          DateTime?     @map("settled_at") @db.Timestamptz(6)
+  settledBy          BigInt?       @map("settled_by")
+  settledMargin      Decimal?      @map("settled_margin") @db.Decimal(18, 2)
+  invoiceStatus      InvoiceStatus @default(NONE) @map("invoice_status")
+  usdInvoiceAmount   Decimal?      @map("usd_invoice_amount") @db.Decimal(18, 2)
+  memo               String?
+  isVoid             Boolean       @default(false) @map("is_void")
+  voidReason         String?       @map("void_reason")
+  voidedBy           BigInt?       @map("voided_by")
+  voidedAt           DateTime?     @map("voided_at") @db.Timestamptz(6)
+  createdBy          BigInt        @map("created_by")
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedBy          BigInt?       @map("updated_by")
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  partner       Partner                @relation(fields: [partnerId], references: [id])
+  dealType      DealType               @relation(fields: [dealTypeId], references: [id])
+  receipts      Receipt[]
+  expenseAllocs ExpenseAllocation[]
+  remitAllocs   RemittanceAllocation[]
+  depositMoves  DepositLedger[]
+  invoiceLinks  InvoiceOrder[]
+
+  @@index([partnerId, orderDate(sort: Desc)])
+  @@index([route, status])
+  @@index([externalRef])
+  @@map("orders")
+}
+
+model Receipt {
+  id                   BigInt        @id @default(autoincrement())
+  receiptNo            String        @unique @map("receipt_no") @db.VarChar(20)
+  orderId              BigInt?       @map("order_id")
+  partnerId            BigInt        @map("partner_id")
+  accountId            BigInt        @map("account_id")
+  route                Route
+  entity               Entity
+  receiptDate          DateTime      @map("receipt_date") @db.Date
+  receiptDateEstimated Boolean       @default(false) @map("receipt_date_estimated")
+  source               ReceiptSource @default(DIRECT)
+  currency             Currency
+  /// 실제 통장에 들어온 금액 (부가세 포함)
+  amount               Decimal       @db.Decimal(18, 2)
+  fxRate               Decimal?      @map("fx_rate") @db.Decimal(18, 6)
+  fxRateSource         FxSource      @default(MANUAL) @map("fx_rate_source")
+  amountKrw            Decimal       @map("amount_krw") @db.Decimal(18, 2)
+  amountCny            Decimal?      @map("amount_cny") @db.Decimal(18, 2)
+  usdAmount            Decimal?      @map("usd_amount") @db.Decimal(18, 2)
+  memo                 String?
+  isVoid               Boolean       @default(false) @map("is_void")
+  voidReason           String?       @map("void_reason")
+  voidedBy             BigInt?       @map("voided_by")
+  voidedAt             DateTime?     @map("voided_at") @db.Timestamptz(6)
+  createdBy            BigInt        @map("created_by")
+  createdAt            DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedBy            BigInt?       @map("updated_by")
+  updatedAt            DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  order   Order?         @relation(fields: [orderId], references: [id])
+  partner Partner        @relation(fields: [partnerId], references: [id])
+  account Account        @relation(fields: [accountId], references: [id])
+  splits  ReceiptSplit[]
+
+  @@index([partnerId, receiptDate(sort: Desc)])
+  @@index([orderId])
+  @@index([accountId, receiptDate])
+  @@map("receipts")
+}
+
+/// 입금 성격 분해 — SUM(splits.amount) = receipts.amount (트리거로 강제)
+model ReceiptSplit {
+  id        BigInt    @id @default(autoincrement())
+  receiptId BigInt    @map("receipt_id")
+  splitKind SplitKind @map("split_kind")
+  amount    Decimal   @db.Decimal(18, 2)
+  amountKrw Decimal   @map("amount_krw") @db.Decimal(18, 2)
+  amountCny Decimal?  @map("amount_cny") @db.Decimal(18, 2)
+
+  receipt Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+
+  @@index([splitKind])
+  @@index([receiptId])
+  @@map("receipt_splits")
+}
+
+/// 고객 예치금 원장 — append-only. DB RULE로 UPDATE/DELETE 차단.
+model DepositLedger {
+  id           BigInt          @id @default(autoincrement())
+  partnerId    BigInt          @map("partner_id")
+  depositKind  DepositKind     @map("deposit_kind")
+  movement     DepositMovement
+  /// 부호 포함 (증가 +, 감소 −)
+  amountKrw    Decimal         @map("amount_krw") @db.Decimal(18, 2)
+  movementDate DateTime        @map("movement_date") @db.Date
+  refTable     String?         @map("ref_table") @db.VarChar(50)
+  refId        BigInt?         @map("ref_id")
+  orderId      BigInt?         @map("order_id")
+  /// ADJUST / REFUND 시 필수
+  reason       String?
+  createdBy    BigInt          @map("created_by")
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  partner Partner @relation(fields: [partnerId], references: [id])
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  @@index([partnerId, depositKind])
+  @@index([movementDate])
+  @@map("deposit_ledger")
+}
+
+model Expense {
+  id                   BigInt        @id @default(autoincrement())
+  expenseNo            String        @unique @map("expense_no") @db.VarChar(20)
+  entity               Entity
+  expenseDate          DateTime      @map("expense_date") @db.Date
+  expenseDateEstimated Boolean       @default(false) @map("expense_date_estimated")
+  categoryId           BigInt        @map("category_id")
+  partnerId            BigInt?       @map("partner_id")
+  vendorName           String?       @map("vendor_name") @db.VarChar(100)
+  accountId            BigInt?       @map("account_id")
+  paymentMethod        String?       @map("payment_method") @db.VarChar(20)
+  currency             Currency
+  amount               Decimal       @db.Decimal(18, 2)
+  fxRate               Decimal?      @map("fx_rate") @db.Decimal(18, 6)
+  fxRateSource         FxSource      @default(MANUAL) @map("fx_rate_source")
+  amountKrw            Decimal       @map("amount_krw") @db.Decimal(18, 2)
+  amountCny            Decimal?      @map("amount_cny") @db.Decimal(18, 2)
+  paymentStatus        PaymentStatus @default(PAID) @map("payment_status")
+  paidAt               DateTime?     @map("paid_at") @db.Date
+  // 임시공 전용
+  workPeriodFrom       DateTime?     @map("work_period_from") @db.Date
+  workPeriodTo         DateTime?     @map("work_period_to") @db.Date
+  workDesc             String?       @map("work_desc") @db.VarChar(200)
+  memo                 String?
+  isVoid               Boolean       @default(false) @map("is_void")
+  voidReason           String?       @map("void_reason")
+  voidedBy             BigInt?       @map("voided_by")
+  voidedAt             DateTime?     @map("voided_at") @db.Timestamptz(6)
+  createdBy            BigInt        @map("created_by")
+  createdAt            DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedBy            BigInt?       @map("updated_by")
+  updatedAt            DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  category ExpenseCategory     @relation(fields: [categoryId], references: [id])
+  partner  Partner?            @relation(fields: [partnerId], references: [id])
+  account  Account?            @relation(fields: [accountId], references: [id])
+  allocs   ExpenseAllocation[]
+  payroll  Payroll?
+
+  @@index([categoryId, expenseDate(sort: Desc)])
+  @@index([entity, expenseDate])
+  @@index([paymentStatus])
+  @@map("expenses")
+}
+
+/// 지출↔주문 배분. 배분 행이 없으면 그 지출은 운영비다.
+model ExpenseAllocation {
+  id          BigInt   @id @default(autoincrement())
+  expenseId   BigInt   @map("expense_id")
+  orderId     BigInt   @map("order_id")
+  allocAmount Decimal  @map("alloc_amount") @db.Decimal(18, 2)
+  allocKrw    Decimal  @map("alloc_krw") @db.Decimal(18, 2)
+  allocCny    Decimal? @map("alloc_cny") @db.Decimal(18, 2)
+  allocBasis  String   @default("AMOUNT") @map("alloc_basis") @db.VarChar(20)
+  memo        String?
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  order   Order   @relation(fields: [orderId], references: [id])
+
+  @@unique([expenseId, orderId])
+  @@index([orderId])
+  @@map("expense_allocations")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 해외송금 · 내부 자금이동
+// ─────────────────────────────────────────────────────────────
+
+model Remittance {
+  id               BigInt      @id @default(autoincrement())
+  remitNo          String      @unique @map("remit_no") @db.VarChar(20)
+  remitDate        DateTime    @map("remit_date") @db.Date
+  fromAccountId    BigInt      @map("from_account_id")
+  toAccountId      BigInt      @map("to_account_id")
+  krwAmount        Decimal     @map("krw_amount") @db.Decimal(18, 2)
+  usdAmount        Decimal?    @map("usd_amount") @db.Decimal(18, 2)
+  cnyArrivalAmount Decimal?    @map("cny_arrival_amount") @db.Decimal(18, 2)
+  fxRateKrwUsd     Decimal?    @map("fx_rate_krw_usd") @db.Decimal(18, 6)
+  fxRateUsdCny     Decimal?    @map("fx_rate_usd_cny") @db.Decimal(18, 6)
+  /// 실효환율 = krwAmount / cnyArrivalAmount
+  fxRateKrwCny     Decimal?    @map("fx_rate_krw_cny") @db.Decimal(18, 6)
+  bankFeeKrw       Decimal     @default(0) @map("bank_fee_krw") @db.Decimal(18, 2)
+  status           RemitStatus @default(DRAFT)
+  memo             String?
+  isVoid           Boolean     @default(false) @map("is_void")
+  voidReason       String?     @map("void_reason")
+  createdBy        BigInt      @map("created_by")
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedBy        BigInt?     @map("updated_by")
+  updatedAt        DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  fromAccount Account                @relation("RemitFrom", fields: [fromAccountId], references: [id])
+  toAccount   Account                @relation("RemitTo", fields: [toAccountId], references: [id])
+  allocs      RemittanceAllocation[]
+
+  @@index([remitDate(sort: Desc)])
+  @@map("remittances")
+}
+
+/// 한 번의 송금에 여러 주문을 연결. SUM(allocKrw) = remittance.krwAmount
+model RemittanceAllocation {
+  id           BigInt   @id @default(autoincrement())
+  remittanceId BigInt   @map("remittance_id")
+  partnerId    BigInt   @map("partner_id")
+  orderId      BigInt?  @map("order_id")
+  allocKrw     Decimal  @map("alloc_krw") @db.Decimal(18, 2)
+  allocCny     Decimal? @map("alloc_cny") @db.Decimal(18, 2)
+  memo         String?
+
+  remittance Remittance @relation(fields: [remittanceId], references: [id], onDelete: Cascade)
+  partner    Partner    @relation(fields: [partnerId], references: [id])
+  order      Order?     @relation(fields: [orderId], references: [id])
+
+  @@index([orderId])
+  @@index([partnerId])
+  @@map("remittance_allocations")
+}
+
+/// 내부 자금이동 — 한국법인 → 중국법인 자체 송금.
+/// 엑셀의 "이우드림" 16건이 여기로 간다. 매출·마진 집계에서 제외된다.
+model InternalTransfer {
+  id               BigInt   @id @default(autoincrement())
+  transferNo       String   @unique @map("transfer_no") @db.VarChar(20)
+  transferDate     DateTime @map("transfer_date") @db.Date
+  fromEntity       Entity   @map("from_entity")
+  toEntity         Entity   @map("to_entity")
+  fromAccountId    BigInt?  @map("from_account_id")
+  toAccountId      BigInt?  @map("to_account_id")
+  krwAmount        Decimal? @map("krw_amount") @db.Decimal(18, 2)
+  usdAmount        Decimal? @map("usd_amount") @db.Decimal(18, 2)
+  cnyArrivalAmount Decimal? @map("cny_arrival_amount") @db.Decimal(18, 2)
+  fxRateUsdCny     Decimal? @map("fx_rate_usd_cny") @db.Decimal(18, 6)
+  bankFee          Decimal  @default(0) @map("bank_fee") @db.Decimal(18, 2)
+  purpose          String?  @db.VarChar(30)
+  memo             String?
+  isVoid           Boolean  @default(false) @map("is_void")
+  createdBy        BigInt   @map("created_by")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedBy        BigInt?  @map("updated_by")
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  fromAccount Account? @relation("TransferFrom", fields: [fromAccountId], references: [id])
+  toAccount   Account? @relation("TransferTo", fields: [toAccountId], references: [id])
+
+  @@index([transferDate(sort: Desc)])
+  @@map("internal_transfers")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 세금계산서
+// ─────────────────────────────────────────────────────────────
+
+model Invoice {
+  id                 BigInt        @id @default(autoincrement())
+  invoiceNo          String        @unique @map("invoice_no") @db.VarChar(20)
+  partnerId          BigInt        @map("partner_id")
+  dealTypeId         BigInt        @map("deal_type_id")
+  accountingClass    String        @map("accounting_class") @db.VarChar(30)
+  totalReceiptAmount Decimal?      @map("total_receipt_amount") @db.Decimal(18, 2)
+  targetAmount       Decimal       @map("target_amount") @db.Decimal(18, 2)
+  targetAmountSource String        @default("AUTO") @map("target_amount_source") @db.VarChar(10)
+  targetAmountReason String?       @map("target_amount_reason")
+  /// 발행 시점의 규칙 스냅샷
+  vatMode            VatMode       @map("vat_mode")
+  supplyAmount       Decimal       @map("supply_amount") @db.Decimal(18, 2)
+  vatAmount          Decimal       @map("vat_amount") @db.Decimal(18, 2)
+  totalAmount        Decimal       @map("total_amount") @db.Decimal(18, 2)
+  issueStatus        InvoiceStatus @default(PENDING) @map("issue_status")
+  issueDate          DateTime?     @map("issue_date") @db.Date
+  ntsApprovalNo      String?       @map("nts_approval_no") @db.VarChar(50)
+  memo               String?
+  isVoid             Boolean       @default(false) @map("is_void")
+  createdBy          BigInt        @map("created_by")
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedBy          BigInt?       @map("updated_by")
+  updatedAt          DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  partner  Partner        @relation(fields: [partnerId], references: [id])
+  dealType DealType       @relation(fields: [dealTypeId], references: [id])
+  orders   InvoiceOrder[]
+
+  @@index([partnerId, issueDate(sort: Desc)])
+  @@index([issueStatus])
+  @@map("invoices")
+}
+
+model InvoiceOrder {
+  id        BigInt  @id @default(autoincrement())
+  invoiceId BigInt  @map("invoice_id")
+  orderId   BigInt  @map("order_id")
+  amount    Decimal @db.Decimal(18, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  order   Order   @relation(fields: [orderId], references: [id])
+
+  @@unique([invoiceId, orderId])
+  @@map("invoice_orders")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 중국 운영비
+// ─────────────────────────────────────────────────────────────
+
+model Employee {
+  id         BigInt    @id @default(autoincrement())
+  empCode    String    @unique @map("emp_code") @db.VarChar(20)
+  name       String    @db.VarChar(50)
+  nameCn     String?   @map("name_cn") @db.VarChar(50)
+  position   String?   @db.VarChar(50)
+  hireDate   DateTime? @map("hire_date") @db.Date
+  resignDate DateTime? @map("resign_date") @db.Date
+  baseSalary Decimal?  @map("base_salary") @db.Decimal(18, 2)
+  currency   Currency  @default(CNY)
+  isActive   Boolean   @default(true) @map("is_active")
+  memo       String?
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  payrolls Payroll[]
+
+  @@map("employees")
+}
+
+model Payroll {
+  id                BigInt    @id @default(autoincrement())
+  /// 귀속월 — 엑셀에 없어 기간이 섞였던 문제를 막는다
+  yearMonth         String    @map("year_month") @db.Char(7)
+  employeeId        BigInt    @map("employee_id")
+  baseSalary        Decimal   @map("base_salary") @db.Decimal(18, 2)
+  allowance         Decimal   @default(0) @db.Decimal(18, 2)
+  deduction         Decimal   @default(0) @db.Decimal(18, 2)
+  insuranceCompany  Decimal   @default(0) @map("insurance_company") @db.Decimal(18, 2)
+  insuranceEmployee Decimal   @default(0) @map("insurance_employee") @db.Decimal(18, 2)
+  /// 실제 지급액 — 집계는 이 값 기준
+  actualPaid        Decimal   @map("actual_paid") @db.Decimal(18, 2)
+  currency          Currency  @default(CNY)
+  paidAt            DateTime? @map("paid_at") @db.Date
+  expenseId         BigInt?   @unique @map("expense_id")
+  memo              String?
+  createdBy         BigInt    @map("created_by")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedBy         BigInt?   @map("updated_by")
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+  expense  Expense? @relation(fields: [expenseId], references: [id])
+
+  @@unique([yearMonth, employeeId])
+  @@index([yearMonth])
+  @@map("payrolls")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 이력 · 부가
+// ─────────────────────────────────────────────────────────────
+
+/// 변경이력 — INSERT 전용. 이전값 / 변경값 / 수정자 / 수정시각 / 사유를 남긴다.
+model AuditLog {
+  id        BigInt      @id @default(autoincrement())
+  tableName String      @map("table_name") @db.VarChar(50)
+  recordId  BigInt      @map("record_id")
+  action    AuditAction
+  fieldName String?     @map("field_name") @db.VarChar(50)
+  oldValue  String?     @map("old_value")
+  newValue  String?     @map("new_value")
+  changedBy BigInt      @map("changed_by")
+  changedAt DateTime    @default(now()) @map("changed_at") @db.Timestamptz(6)
+  reason    String?
+  ipAddress String?     @map("ip_address") @db.VarChar(64)
+  requestId String?     @map("request_id") @db.Uuid
+
+  user User @relation(fields: [changedBy], references: [id])
+
+  @@index([tableName, recordId, changedAt(sort: Desc)])
+  @@index([changedAt(sort: Desc)])
+  @@index([changedBy])
+  @@map("change_logs")
+}
+
+model Attachment {
+  id         BigInt   @id @default(autoincrement())
+  refTable   String   @map("ref_table") @db.VarChar(50)
+  refId      BigInt   @map("ref_id")
+  fileName   String   @map("file_name") @db.VarChar(255)
+  filePath   String   @map("file_path") @db.VarChar(500)
+  fileSize   Int      @map("file_size")
+  mimeType   String   @map("mime_type") @db.VarChar(100)
+  uploadedBy BigInt   @map("uploaded_by")
+  uploadedAt DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  @@index([refTable, refId])
+  @@map("attachments")
+}
+
+/// 참고환율 — 입력 시 기본값 제안용. 실제 저장값은 항상 사용자 확인 환율.
+model FxRateRef {
+  id            BigInt   @id @default(autoincrement())
+  rateDate      DateTime @map("rate_date") @db.Date
+  baseCurrency  Currency @map("base_currency")
+  quoteCurrency Currency @map("quote_currency")
+  rate          Decimal  @db.Decimal(18, 6)
+  source        String?  @db.VarChar(30)
+
+  @@unique([rateDate, baseCurrency, quoteCurrency])
+  @@map("fx_rate_refs")
+}
+
+model ImportBatch {
+  id          BigInt       @id @default(autoincrement())
+  fileName    String       @map("file_name") @db.VarChar(255)
+  status      ImportStatus @default(UPLOADED)
+  uploadedBy  BigInt       @map("uploaded_by")
+  uploadedAt  DateTime     @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+  committedAt DateTime?    @map("committed_at") @db.Timestamptz(6)
+  summary     Json?
+
+  rows ImportRow[]
+
+  @@map("import_batches")
+}
+
+model ImportRow {
+  id          BigInt          @id @default(autoincrement())
+  batchId     BigInt          @map("batch_id")
+  sheetName   String          @map("sheet_name") @db.VarChar(50)
+  rowIndex    Int             @map("row_index")
+  /// 원본 행 전체 보존
+  rawJson     Json            @map("raw_json")
+  /// 원본 수식 — 환율이 수식에만 있어 근거가 필요하다
+  rawFormula  Json?           @map("raw_formula")
+  mapStatus   ImportRowStatus @default(OK) @map("map_status")
+  targetTable String?         @map("target_table") @db.VarChar(50)
+  targetId    BigInt?         @map("target_id")
+  errorMsg    String?         @map("error_msg")
+
+  batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId, sheetName])
+  @@index([mapStatus])
+  @@map("import_rows")
+}

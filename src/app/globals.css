@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&family=Noto+Serif+KR:wght@600&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { color-scheme: light; }
+  body {
+    @apply bg-paper text-ink;
+    font-feature-settings: 'tnum' 0;
+    letter-spacing: -0.005em;
+  }
+  /* 숫자 칸은 항상 자릿수가 맞아야 한다 */
+  .num { font-variant-numeric: tabular-nums; @apply font-mono; }
+  table { @apply border-collapse w-full; }
+  th, td { @apply px-3 py-2 text-left border-b border-line align-top; }
+  thead th {
+    @apply bg-sunken text-xs font-medium text-ink-muted whitespace-nowrap tracking-wide border-b border-line;
+  }
+  tbody tr:last-child td { @apply border-b-0; }
+  td.n, th.n { @apply text-right num whitespace-nowrap; }
+  input, select, textarea {
+    @apply w-full rounded-sm border border-line bg-surface px-3 py-2 text-sm
+           outline-none transition focus:border-jade focus:ring-1 focus:ring-jade/30;
+  }
+  input[type='checkbox'] { @apply w-4 h-4 accent-jade; }
+  label { @apply block text-sm text-ink-2 mb-1; }
+  a { @apply text-jade; }
+  ::placeholder { @apply text-ink-muted/60; }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-sm px-3.5 py-2 text-sm font-medium
+           transition disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-primary { @apply btn bg-jade text-white hover:bg-jade/90; }
+  .btn-ghost   { @apply btn border border-line bg-surface text-ink-2 hover:bg-sunken; }
+  .btn-danger  { @apply btn border border-clay bg-clay-soft text-clay hover:bg-clay/10; }
+  .btn-sm      { @apply px-2.5 py-1 text-xs; }
+
+  .card { @apply rounded border border-line bg-surface; }
+  .card-head {
+    @apply flex items-center justify-between gap-3 border-b border-line px-5 py-3;
+  }
+  .card-body { @apply px-5 py-4; }
+
+  .pill {
+    @apply inline-block rounded-sm px-2 py-0.5 text-[11px] font-mono tracking-wide whitespace-nowrap;
+  }
+  .pill-neutral { @apply pill bg-slate2-soft text-slate2; }
+  .pill-good    { @apply pill bg-jade-soft text-jade; }
+  .pill-warn    { @apply pill bg-clay-soft text-clay; }
+  .pill-gold    { @apply pill bg-gold-soft text-gold; }
+
+  .field-error { @apply mt-1 text-xs text-clay; }
+  .hint { @apply text-xs text-ink-muted leading-relaxed; }
+
+  .section-title { @apply font-serif text-lg font-semibold text-ink; }
+  .table-wrap { @apply overflow-x-auto rounded border border-line bg-surface; }
+}
