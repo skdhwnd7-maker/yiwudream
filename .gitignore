@@ -8,3 +8,5 @@ build/
 next-env.d.ts
 .DS_Store
 /shots/
+# 올린 엑셀 원본 — 서버에만 둔다
+.uploads/

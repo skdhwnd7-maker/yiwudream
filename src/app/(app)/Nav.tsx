@@ -41,7 +41,7 @@ const GROUPS: Group[] = [
   {
     title: '관리',
     items: [
-      { href: '/import', label: '엑셀 가져오기', icon: '📥', soon: true },
+      { href: '/import', label: '엑셀 가져오기', icon: '📥' },
       { href: '/settings', label: '설정', icon: '⚙️', perm: 'settings.manage' },
       { href: '/audit', label: '변경이력', icon: '📜', perm: 'audit.view' },
     ],

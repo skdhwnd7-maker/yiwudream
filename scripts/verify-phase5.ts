@@ -14,6 +14,7 @@ import {
   PrismaClient, Prisma, Route, Entity, Currency, SplitKind, PaymentStatus, InvoiceStatus,
 } from '@prisma/client'
 import { dashboardData, monthRange } from '../src/lib/dashboard'
+import { latestFxRate } from '../src/lib/funds'
 import { cnyToKrw } from '../src/lib/money'
 
 const prisma = new PrismaClient()
@@ -38,6 +39,13 @@ async function main() {
 
   const before = await dashboardData(YM)
   check('검증용 달이 비어 있다', before.totalRevenue.toString(), '0')
+
+  // CNY 정산 주문을 원화로 환산할 때 대시보드가 쓰는 환율.
+  // 최근 입금 전표에서 가져오므로 DB 상태에 따라 달라진다 — 고정값으로 기대하면 안 된다.
+  const fx = await latestFxRate()
+  if (!fx) throw new Error('환산환율을 구할 수 없습니다. 입금 전표가 하나도 없습니다.')
+  const cnyKrw = (v: string) => D2(v).mul(fx).toString()
+  console.log(`  (CNY 환산환율 ${fx.toString()})`)
 
   const dtCorp = await prisma.dealType.findFirstOrThrow({ where: { code: 'CORP_FULL' } })
   const dtOver = await prisma.dealType.findFirstOrThrow({ where: { code: 'OVERSEAS_DIRECT' } })
@@ -136,16 +144,17 @@ async function main() {
   const e2 = await mkExpense(catGoods.id, '9000', day(6), o2.id)
 
   d = await dashboardData(YM)
-  check('CNY 주문 환산 매출', d.byRoute.find((r) => r.route === 'OVERSEAS')?.revenue.toString(), '2180000')
-  check('합산 매출', d.totalRevenue.toString(), '3180000')
-  check('합산 주문마진', d.orderMargin.toString(), '564000')
+  check('CNY 주문 환산 매출',
+    d.byRoute.find((r) => r.route === 'OVERSEAS')?.revenue.toString(), cnyKrw('10000'))
+  check('합산 매출', d.totalRevenue.toString(), D2('1000000').plus(cnyKrw('10000')).toString())
+  check('합산 주문마진', d.orderMargin.toString(), D2('346000').plus(cnyKrw('1000')).toString())
 
   console.log('\n━━ 3. 자사(이우드림) 거래는 거래액에서 빠진다 ━━')
   const o3 = await mkOrder(inside.id, Route.BANK_CORP, dtCorp.id, Currency.KRW, day(7))
   await mkReceipt(o3, accCorp.id, Currency.KRW, '5000000', [[SplitKind.SALES, '5000000']], day(7))
 
   d = await dashboardData(YM)
-  check('자사 거래 제외 후 매출', d.totalRevenue.toString(), '3180000')
+  check('자사 거래 제외 후 매출', d.totalRevenue.toString(), D2('1000000').plus(cnyKrw('10000')).toString())
   check('자사 거래는 순위에도 없다', d.ranks.some((r) => r.partnerName.includes('대시자사')), 'false')
 
   console.log('\n━━ 4. 입금 없는 주문 — 마진에서 빼고 미청구로 센다 ━━')
@@ -153,18 +162,20 @@ async function main() {
   const e4 = await mkExpense(catGoods.id, '5000', day(9), o4.id) // 1,090,000원
 
   d = await dashboardData(YM)
-  check('매출은 그대로', d.totalRevenue.toString(), '3180000')
-  check('마진도 그대로 (적자로 안 보인다)', d.orderMargin.toString(), '564000')
+  check('매출은 그대로', d.totalRevenue.toString(), D2('1000000').plus(cnyKrw('10000')).toString())
+  check('마진도 그대로 (적자로 안 보인다)',
+    d.orderMargin.toString(), D2('346000').plus(cnyKrw('1000')).toString())
   check('미청구 건수', d.unbilledOrderCount, 1)
   check('미청구 비용', d.unbilledOrderCost.toString(), '1090000')
 
   console.log('\n━━ 5. 중국 운영비 — 주문 귀속분은 빠진다 ━━')
-  const e5 = await mkExpense(catSalary.id, '10000', day(10)) // 2,180,000원, 주문 미귀속
+  const e5 = await mkExpense(catSalary.id, '10000', day(10)) // 주문에 붙이지 않는다
 
   d = await dashboardData(YM)
   check('직원 급여', d.opSalary.toString(), '2180000')
   check('운영비 합계 (귀속분 제외)', d.opTotal.toString(), '2180000')
-  check('최종 영업마진 = 주문마진 − 운영비', d.operatingMargin.toString(), '-1616000')
+  check('최종 영업마진 = 주문마진 − 운영비',
+    d.operatingMargin.toString(), d.orderMargin.minus(d.opTotal).toString())
 
   console.log('\n━━ 6. 내부 자금이동 — 거래액에 넣지 않고 따로 표시 ━━')
   const it = await prisma.internalTransfer.create({
@@ -178,19 +189,21 @@ async function main() {
   })
 
   d = await dashboardData(YM)
-  check('내부이동 후에도 매출 불변', d.totalRevenue.toString(), '3180000')
+  check('내부이동 후에도 매출 불변',
+    d.totalRevenue.toString(), D2('1000000').plus(cnyKrw('10000')).toString())
   check('내부이동 USD', d.internalTransferUsd.toString(), '10000')
   check('내부이동 CNY', d.internalTransferCny.toString(), '67900')
 
   console.log('\n━━ 7. 거래처 순위 ━━')
   check('순위 거래처 수', d.ranks.length, 1)
-  check('1위 매출', d.ranks[0].revenue.toString(), '3180000')
-  check('1위 마진율(%)', d.ranks[0].marginRate?.toString(), '17.74')
+  check('1위 매출', d.ranks[0].revenue.toString(), D2('1000000').plus(cnyKrw('10000')).toString())
+  check('1위 마진율(%)', d.ranks[0].marginRate?.toString(),
+    d.orderMargin.div(d.totalRevenue).mul(100).toDecimalPlaces(2).toString())
 
   console.log('\n━━ 8. 추세 — 12개월, 마지막이 조회월 ━━')
   check('추세 길이', d.trend.length, 12)
   check('추세 마지막 달', d.trend[11].ym, YM)
-  check('추세 마지막 매출', d.trend[11].revenue.toString(), '3180000')
+  check('추세 마지막 매출', d.trend[11].revenue.toString(), D2('1000000').plus(cnyKrw('10000')).toString())
 
   console.log('\n━━ 9. 다른 달에는 잡히지 않는다 ━━')
   const other = await dashboardData('2019-04')

@@ -7,7 +7,8 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from './db'
 
-export type DocPrefix = 'ORDER' | 'RC' | 'EX' | 'RM' | 'IT' | 'TX'
+// MIG = 엑셀에서 가져온 주문. 번호만 봐도 이관분인지 알 수 있어야 한다
+export type DocPrefix = 'ORDER' | 'RC' | 'EX' | 'RM' | 'IT' | 'TX' | 'MIG'
 
 type Tx = Prisma.TransactionClient | typeof prisma
 
