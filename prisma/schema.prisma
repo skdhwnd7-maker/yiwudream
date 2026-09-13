@@ -444,7 +444,8 @@ model DepositLedger {
   createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
 
   partner Partner @relation(fields: [partnerId], references: [id])
-  order   Order?  @relation(fields: [orderId], references: [id])
+  // 원장은 고칠 수 없으므로 참조하는 주문도 지울 수 없다. 주문은 취소(is_void)로만 처리한다.
+  order   Order?  @relation(fields: [orderId], references: [id], onDelete: Restrict)
 
   @@index([partnerId, depositKind])
   @@index([movementDate])
@@ -728,6 +729,18 @@ model AuditLog {
   @@index([changedAt(sort: Desc)])
   @@index([changedBy])
   @@map("change_logs")
+}
+
+/// 전표번호 채번 카운터.
+/// next_doc_no() 함수가 이 표를 잠그고 올린다 (prisma/sql/002_numbering.sql).
+/// 스키마에 선언해 두어야 prisma db push 가 이 표를 지우지 않는다.
+model NumberCounter {
+  prefix    String @db.VarChar(10)
+  year      Int
+  lastValue Int    @default(0) @map("last_value")
+
+  @@id([prefix, year])
+  @@map("number_counters")
 }
 
 model Attachment {

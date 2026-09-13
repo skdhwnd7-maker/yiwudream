@@ -18,7 +18,7 @@ const GROUPS: Group[] = [
   {
     title: '거래',
     items: [
-      { href: '/orders', label: '거래 목록', icon: '📝', soon: true },
+      { href: '/orders', label: '거래 목록', icon: '📝' },
       { href: '/partners', label: '거래처 관리', icon: '🏢' },
     ],
   },
