@@ -16,9 +16,9 @@ export default {
         gold: { DEFAULT: '#8A6508', soft: '#F6EFD8' },
       },
       fontFamily: {
-        sans: ['"IBM Plex Sans KR"', '"Apple SD Gothic Neo"', '"Malgun Gothic"', 'system-ui', 'sans-serif'],
-        mono: ['"IBM Plex Mono"', 'ui-monospace', 'monospace'],
-        serif: ['"Noto Serif KR"', 'serif'],
+        sans: ['var(--font-sans)', '"Apple SD Gothic Neo"', '"Malgun Gothic"', 'system-ui', 'sans-serif'],
+        mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
+        serif: ['var(--font-serif)', '"Apple SD Gothic Neo"', 'serif'],
       },
     },
   },
