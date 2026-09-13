@@ -45,6 +45,21 @@ async function main() {
     data: { isActive: false, memo: '검증 스크립트가 만든 계정. 원장 참조로 삭제 불가.' },
   })
 
+  // 검증 스크립트가 만든 직원·급여도 정리한다
+  const testEmps = await prisma.employee.findMany({
+    where: { OR: [{ name: { contains: '검증' } }, { empCode: { startsWith: 'E3' } }, { empCode: { startsWith: 'E6' } }] },
+    select: { id: true },
+  })
+  if (testEmps.length > 0) {
+    const empIds = testEmps.map((e) => e.id)
+    const payrolls = await prisma.payroll.findMany({ where: { employeeId: { in: empIds } }, select: { expenseId: true } })
+    await prisma.payroll.deleteMany({ where: { employeeId: { in: empIds } } })
+    const expIds = payrolls.map((p) => p.expenseId).filter((v): v is bigint => v !== null)
+    if (expIds.length > 0) await prisma.expense.deleteMany({ where: { id: { in: expIds } } })
+    await prisma.employee.deleteMany({ where: { id: { in: empIds } } })
+    console.log(`검증 직원 ${testEmps.length}건 정리 완료`)
+  }
+
   console.log(`검증 거래처 ${testPartners.length}건 정리 완료 (예치금 잔액 0, 비활성 처리)`)
 }
 main().finally(() => prisma.$disconnect())

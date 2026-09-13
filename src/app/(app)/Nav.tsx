@@ -27,15 +27,15 @@ const GROUPS: Group[] = [
     items: [
       { href: '/remittances', label: '해외송금', icon: '🌏' },
       { href: '/transfers', label: '내부 자금이동', icon: '🔁' },
-      { href: '/invoices', label: '세금계산서', icon: '🧾', soon: true },
+      { href: '/invoices', label: '세금계산서', icon: '🧾' },
     ],
   },
   {
     title: '중국 운영비',
     items: [
-      { href: '/payroll', label: '직원 급여', icon: '🇨🇳', perm: 'payroll.view', soon: true },
-      { href: '/temp-labor', label: '임시공 비용', icon: '🔨', soon: true },
-      { href: '/office', label: '사무실 경비', icon: '🏬', soon: true },
+      { href: '/payroll', label: '직원 급여', icon: '🇨🇳', perm: 'payroll.view' },
+      { href: '/temp-labor', label: '임시공 비용', icon: '🔨' },
+      { href: '/office', label: '중국 운영비', icon: '🏬' },
     ],
   },
   {
