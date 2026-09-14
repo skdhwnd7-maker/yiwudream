@@ -829,6 +829,137 @@ async function main() {
     await prisma.partner.delete({ where: { id: p2.id } })
   }
 
+  // ════════════════════════════════════════════════════════════
+  console.log('\n━━ 13. 부가세 신고·납부 ━━')
+  {
+    const { vatStanding } = await import('../src/lib/vat')
+    const { saveVatPeriod, fileVatPeriod, payVatPeriod, reopenVatPeriod } =
+      await import('../src/app/(app)/invoices/vat/actions')
+    const { fundsSnapshot } = await import('../src/lib/funds')
+
+    const dtCorp = await prisma.dealType.findFirstOrThrow({ where: { code: 'CORP_FULL' } })
+    const accCorp = await prisma.account.findFirstOrThrow({ where: { route: Route.BANK_CORP } })
+    const p3 = await prisma.partner.create({
+      data: { code: `VT${stamp}`, name: `부가세검증${stamp}`, nameNormalized: `vt${stamp}`, createdBy: admin.id },
+    })
+    const mkVat = async (date: Date, supply: string, vat: string, no: string) => {
+      const o = await prisma.order.create({
+        data: {
+          orderNo: `VT${stamp}${no}`, partnerId: p3.id, route: Route.BANK_CORP, dealTypeId: dtCorp.id,
+          accountingClass: '상품매출', entity: Entity.KR, settlementCurrency: Currency.KRW,
+          orderDate: date, invoiceStatus: InvoiceStatus.NONE, createdBy: admin.id,
+        },
+      })
+      const total = D(supply).plus(D(vat))
+      const r = await prisma.receipt.create({
+        data: {
+          receiptNo: `VTR${stamp}${no}`, orderId: o.id, partnerId: p3.id, accountId: accCorp.id,
+          route: Route.BANK_CORP, entity: Entity.KR, receiptDate: date,
+          currency: Currency.KRW, amount: total, amountKrw: total, createdBy: admin.id,
+        },
+      })
+      await prisma.$transaction(async (tx) => {
+        await tx.receiptSplit.create({
+          data: { receiptId: r.id, splitKind: SplitKind.SALES, amount: D(supply), amountKrw: D(supply) },
+        })
+        await tx.receiptSplit.create({
+          data: { receiptId: r.id, splitKind: SplitKind.VAT, amount: D(vat), amountKrw: D(vat) },
+        })
+      })
+      return o
+    }
+
+    const base = await vatStanding()
+    // 2018년 상반기에 100,000, 하반기에 50,000 받았다
+    await mkVat(new Date(2018, 2, 10), '1000000', '100000', 'a')
+    await mkVat(new Date(2018, 8, 10), '500000', '50000', 'b')
+
+    const afterReceipts = await vatStanding()
+    check('받은 부가세가 늘어난다',
+      afterReceipts.collectedTotal.minus(base.collectedTotal).toString(), '150000')
+    check('신고 전에는 전부 예수금',
+      afterReceipts.payable.minus(base.payable).toString(), '150000')
+
+    // 상반기 신고 — 매출세액 100,000, 매입세액 30,000
+    const saved = await runAsUser(owner, () => call(() => saveVatPeriod({}, fd({
+      code: `V${stamp}1`, label: `검증 2018년 1기`,
+      periodFrom: '2018-01-01', periodTo: '2018-06-30',
+      salesVat: '100000', purchaseVat: '30000',
+    })))) as { error?: string; ok?: string }
+    check('신고기간 저장', saved.error ?? 'ok', 'ok')
+
+    const period = await prisma.vatPeriod.findFirstOrThrow({ where: { code: `V${stamp}1` } })
+    check('처음에는 진행중', period.status, 'OPEN')
+    check('진행중이면 예수금 그대로',
+      (await vatStanding()).payable.minus(base.payable).toString(), '150000')
+
+    // 기간이 겹치면 막는다
+    const overlap = await runAsUser(owner, () => call(() => saveVatPeriod({}, fd({
+      code: `V${stamp}X`, label: '겹치는 기간',
+      periodFrom: '2018-05-01', periodTo: '2018-08-31',
+      salesVat: '1', purchaseVat: '0',
+    })))) as { error?: string }
+    checkLike('기간이 겹치면 막는다', overlap.error, '기간이 겹칩니다')
+
+    // 신고 확정 → 상반기 몫이 예수금에서 빠지고 납부예정액만 남는다
+    const filed = await runAsUser(owner, () => call(() => fileVatPeriod({}, fd({
+      id: period.id.toString(),
+    })))) as { error?: string; ok?: string }
+    check('신고 확정', filed.error ?? 'ok', 'ok')
+
+    const afterFile = await vatStanding()
+    check('신고한 기간까지 받은 부가세는 정산된 것으로 본다',
+      afterFile.settled.minus(base.settled).toString(), '100000')
+    check('신고했지만 안 낸 금액 (100,000 − 30,000)',
+      afterFile.filedUnpaid.toString(), '70000')
+    // 예수금 = 하반기 50,000 + 납부예정 70,000
+    check('예수금 = 신고 안 한 몫 + 납부예정',
+      afterFile.payable.minus(base.payable).toString(), '120000')
+
+    const fundsAfterFile = await fundsSnapshot()
+    check('자금현황도 같은 값을 쓴다',
+      fundsAfterFile.vatPayable.toString(), afterFile.payable.toString())
+
+    // 납부 → 지출 전표가 생기고 예수금에서 빠진다
+    const paid = await runAsUser(owner, () => call(() => payVatPeriod({}, fd({
+      id: period.id.toString(), paidAt: '2018-07-25', paidAmount: '70000',
+      accountId: accCorp.id.toString(),
+    })))) as { error?: string; ok?: string }
+    check('납부 처리', paid.error ?? 'ok', 'ok')
+
+    const afterPay = await vatStanding()
+    check('납부하면 납부예정이 사라진다', afterPay.filedUnpaid.toString(), '0')
+    check('예수금은 신고 안 한 몫만 남는다',
+      afterPay.payable.minus(base.payable).toString(), '50000')
+
+    const payExpense = await prisma.expense.findFirst({
+      where: { memo: { contains: '검증 2018년 1기 부가세 납부' }, isVoid: false },
+    })
+    check('납부 지출 전표가 생긴다', payExpense?.amount.toString(), '70000')
+
+    // 되돌리기 → 전표도 취소되고 예수금이 돌아온다
+    const reopened = await runAsUser(owner, () => call(() => reopenVatPeriod({}, fd({
+      id: period.id.toString(), reason: '검증',
+    })))) as { error?: string; ok?: string }
+    check('되돌리기', reopened.error ?? 'ok', 'ok')
+    check('되돌리면 예수금이 돌아온다',
+      (await vatStanding()).payable.minus(base.payable).toString(), '150000')
+    const voided = await prisma.expense.findFirst({
+      where: { memo: { contains: '검증 2018년 1기 부가세 납부' } },
+    })
+    check('납부 전표도 취소된다', voided?.isVoid, true)
+
+    // 정리
+    await prisma.vatPeriod.delete({ where: { id: period.id } })
+    await prisma.expense.deleteMany({ where: { memo: { contains: '검증 2018년 1기 부가세 납부' } } })
+    const vo = await prisma.order.findMany({ where: { partnerId: p3.id }, select: { id: true } })
+    const vr = await prisma.receipt.findMany({ where: { partnerId: p3.id }, select: { id: true } })
+    await prisma.receiptSplit.deleteMany({ where: { receiptId: { in: vr.map((x) => x.id) } } })
+    await prisma.receipt.deleteMany({ where: { partnerId: p3.id } })
+    await prisma.order.deleteMany({ where: { id: { in: vo.map((x) => x.id) } } })
+    await prisma.partner.delete({ where: { id: p3.id } })
+  }
+
   // ── 정리
   const orders = await prisma.order.findMany({ where: { partnerId: partner.id }, select: { id: true } })
   const orderIds = orders.map((o) => o.id)

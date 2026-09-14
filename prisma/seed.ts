@@ -76,6 +76,7 @@ async function main() {
     ['INSURANCE', '사회보험(社保)', CostType.OPERATING, Entity.CN, Currency.CNY, 100],
     ['OFFICE', '사무실 운영비', CostType.OPERATING, Entity.CN, Currency.CNY, 110],
     ['BANK_FEE', '송금·은행 수수료', CostType.BOTH, Entity.KR, Currency.KRW, 120],
+    ['VAT_PAYMENT', '부가세 납부', CostType.OPERATING, Entity.KR, Currency.KRW, 125],
   ]
   for (const [code, name, costType, defaultEntity, defaultCurrency, sortOrder] of categories) {
     await prisma.expenseCategory.upsert({

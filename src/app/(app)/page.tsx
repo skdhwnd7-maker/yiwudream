@@ -213,7 +213,8 @@ export default async function DashboardPage({
           <Mini label="고객 예치금" value={fmtKrw(d.customerDeposits)} tone="clay" note="고객 돈" />
           <Mini label="중국 송금대기금" value={fmtKrw(d.remitPending)} tone="clay" note="보내야 할 돈"
             href={d.remitPending.gt(0) ? '/remittances' : undefined} />
-          <Mini label="부가세 예수금" value={fmtKrw(d.vatPayable)} tone="gold" note="국세청에 낼 돈" />
+          <Mini label="부가세 예수금" value={fmtKrw(d.vatPayable)} tone="gold"
+            note="아직 신고 안 한 몫" href="/invoices/vat" />
           <Mini label="받을 돈 (미수금)" value={fmtKrw(d.receivableTotal)} tone="clay" note="통장에 없는 자산"
             href={d.receivableTotal.gt(0) ? '/funds' : undefined} />
         </div>

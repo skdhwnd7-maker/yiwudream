@@ -130,6 +130,12 @@ enum RemitStatus {
   CANCELLED
 }
 
+enum VatPeriodStatus {
+  OPEN // 진행중 — 아직 신고 전
+  FILED // 신고 완료 — 금액 확정
+  PAID // 납부 완료
+}
+
 enum FxSource {
   MANUAL // 직접 입력
   PARSED // 엑셀 수식에서 추출
@@ -770,6 +776,40 @@ model Attachment {
 }
 
 /// 참고환율 — 입력 시 기본값 제안용. 실제 저장값은 항상 사용자 확인 환율.
+/// 부가세 신고기간.
+///
+/// 받은 부가세를 처음부터 전부 누적해 「사용가능 자금」에서 빼면,
+/// 이미 신고·납부한 부가세까지 계속 회사 돈이 아닌 것으로 잡힌다.
+/// 신고를 마친 기간은 여기에 확정해 두고, 그 뒤로는 예수금에서 뺀다.
+///
+/// 숫자는 프로그램이 만들지 않는다 — 세무사님이 주신 신고서 값을 그대로 넣는다.
+model VatPeriod {
+  id            BigInt          @id @default(autoincrement())
+  /// 신고기간 코드 — 2026-1H(1기 확정), 2026-1P(1기 예정) 같은 식
+  code          String          @unique @db.VarChar(20)
+  label         String          @db.VarChar(50)
+  periodFrom    DateTime        @map("period_from") @db.Date
+  periodTo      DateTime        @map("period_to") @db.Date
+  status        VatPeriodStatus @default(OPEN)
+  /// 신고서상 매출세액 (받은 부가세)
+  salesVat      Decimal         @default(0) @map("sales_vat") @db.Decimal(18, 2)
+  /// 신고서상 매입세액 (돌려받을 부가세)
+  purchaseVat   Decimal         @default(0) @map("purchase_vat") @db.Decimal(18, 2)
+  /// 실제로 낸(또는 돌려받은) 금액. 음수면 환급
+  paidAmount    Decimal?        @map("paid_amount") @db.Decimal(18, 2)
+  paidAt        DateTime?       @map("paid_at") @db.Date
+  /// 납부 지출 전표
+  expenseId     BigInt?         @unique @map("expense_id")
+  memo          String?
+  createdBy     BigInt          @map("created_by")
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedBy     BigInt?         @map("updated_by")
+  updatedAt     DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([periodFrom, periodTo])
+  @@map("vat_periods")
+}
+
 model FxRateRef {
   id            BigInt   @id @default(autoincrement())
   rateDate      DateTime @map("rate_date") @db.Date

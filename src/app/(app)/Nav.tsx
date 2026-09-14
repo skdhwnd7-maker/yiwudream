@@ -28,6 +28,7 @@ const GROUPS: Group[] = [
       { href: '/remittances', label: '해외송금', icon: '🌏', perm: 'remittance.execute' },
       { href: '/transfers', label: '내부 자금이동', icon: '🔁', perm: 'profit.view' },
       { href: '/invoices', label: '세금계산서', icon: '🧾', perm: 'invoice.confirm' },
+      { href: '/invoices/vat', label: '부가세 신고', icon: '🏛️', perm: 'invoice.confirm' },
     ],
   },
   {

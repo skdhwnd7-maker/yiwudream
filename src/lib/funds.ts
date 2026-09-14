@@ -53,8 +53,15 @@ export interface FundsSnapshot {
   remitPending: Prisma.Decimal
   /** ④ 미지급 비용 */
   unpaidExpenses: Prisma.Decimal
-  /** ⑤ 부가세 예수금 — 받아서 갖고 있는 부가세 */
+  /**
+   * ⑤ 부가세 예수금 — 아직 신고·납부하지 않아 갖고 있어야 하는 부가세.
+   * 신고를 마친 기간 몫은 빠진다 (src/lib/vat.ts).
+   */
   vatPayable: Prisma.Decimal
+  /** 지금까지 받은 부가세 전부 — 정산분 포함 */
+  vatCollectedTotal: Prisma.Decimal
+  /** 신고를 마친 마지막 기간의 종료일 */
+  vatSettledThrough: Date | null
   /** ⑥ 실제 사용가능 자금 */
   available: Prisma.Decimal
   /** ⑦ 미수금 — 잔액엔 없지만 받을 자산 */
@@ -170,19 +177,14 @@ export async function fundsSnapshot(asOf?: Date): Promise<FundsSnapshot> {
     // 환율을 모르는 외화 계좌는 합계에서 빼고 화면에서 따로 알린다
   }
 
-  const [depositRows, vatAgg, unpaidAgg] = await Promise.all([
+  const { vatStanding } = await import('./vat')
+  const [depositRows, vat, unpaidAgg] = await Promise.all([
     prisma.depositLedger.groupBy({
       by: ['partnerId', 'depositKind'],
       _sum: { amountKrw: true },
       ...(asOf ? { where: { movementDate: { lte: asOf } } } : {}),
     }),
-    prisma.receiptSplit.aggregate({
-      where: {
-        splitKind: 'VAT',
-        receipt: { isVoid: false, ...(asOf ? { receiptDate: { lte: asOf } } : {}) },
-      },
-      _sum: { amountKrw: true },
-    }),
+    vatStanding(asOf),
     // ⚠ 지급여부는 지금 상태다. 나중에 지급한 건도 과거 시점 조회에서는
     //    「미지급」 으로 나오지 않는다 — 상태 변경 이력을 따로 남기지 않기 때문이다.
     //    지금 미지급인 것만 센다.
@@ -221,7 +223,7 @@ export async function fundsSnapshot(asOf?: Date): Promise<FundsSnapshot> {
 
   const customerDeposits = depositsByPartner.reduce((s, d) => s.plus(d.total), zero())
   const remitPending = depositsByPartner.reduce((s, d) => s.plus(d.goodsFund), zero())
-  const vatPayable = D(vatAgg._sum.amountKrw ?? 0)
+  const vatPayable = vat.payable
   const unpaidExpenses = D(unpaidAgg._sum.amountKrw ?? 0)
 
   const receivables = await listReceivables(asOf)
@@ -234,6 +236,8 @@ export async function fundsSnapshot(asOf?: Date): Promise<FundsSnapshot> {
     remitPending,
     unpaidExpenses,
     vatPayable,
+    vatCollectedTotal: vat.collectedTotal,
+    vatSettledThrough: vat.settledThrough,
     available: totalBalanceKrw.minus(customerDeposits).minus(vatPayable).minus(unpaidExpenses),
     receivableTotal,
     depositsByPartner,
