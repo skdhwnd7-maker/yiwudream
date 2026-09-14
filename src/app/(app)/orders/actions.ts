@@ -618,14 +618,14 @@ export async function voidExpense(_prev: ActionState, formData: FormData): Promi
   const user = await requirePermission('transaction.void')
   const expenseId = BigInt(String(formData.get('expenseId') ?? '0'))
   const reason = String(formData.get('reason') ?? '').trim()
-  if (!reason) return { error: '취소 사유를 입력하세요.' }
+  if (!reason) return { error: '삭제 사유를 입력하세요.' }
 
   const expense = await prisma.expense.findUnique({
     where: { id: expenseId },
     include: { allocs: { include: { order: true } } },
   })
   if (!expense) return { error: '지출 전표를 찾을 수 없습니다.' }
-  if (expense.isVoid) return { error: '이미 취소된 전표입니다.' }
+  if (expense.isVoid) return { error: '이미 삭제된 전표입니다.' }
 
   const locked = expense.allocs.filter((a) => a.order.status === OrderStatus.SETTLED)
   if (locked.length > 0) {
@@ -649,7 +649,7 @@ export async function voidExpense(_prev: ActionState, formData: FormData): Promi
   for (const a of expense.allocs) revalidate(`/orders/${a.orderId}`)
   // 주문에 안 붙은 운영비도 이 액션으로 취소한다. 그 화면들도 같이 새로 그린다.
   revalidate('/office', '/temp-labor', '/funds', '/')
-  return { ok: '지출 전표를 취소했습니다.' }
+  return { ok: '지출 전표를 삭제했습니다.' }
 }
 
 /** 금액 수정 — 사유 없이는 저장되지 않는다 */

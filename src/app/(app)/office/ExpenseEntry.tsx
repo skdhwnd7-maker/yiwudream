@@ -134,7 +134,7 @@ export default function ExpenseEntry({
 
         <div className="flex gap-2">
           <SubmitButton>저장</SubmitButton>
-          <button type="button" className="btn-ghost" onClick={() => setOpen(false)}>취소</button>
+          <button type="button" className="btn-ghost" onClick={() => setOpen(false)}>닫기</button>
         </div>
       </div>
     </form>
