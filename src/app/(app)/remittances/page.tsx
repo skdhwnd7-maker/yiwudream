@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { requireUser } from '@/lib/session-guard'
+import { requirePermission } from '@/lib/session-guard'
 import { prisma } from '@/lib/db'
 import { listRemitPending } from '@/lib/funds'
 import { fmtKrw, fmtCny, fmtRate, D } from '@/lib/money'
@@ -18,7 +18,7 @@ export default async function RemittancesPage({
 }: {
   searchParams: Promise<{ created?: string; done?: string }>
 }) {
-  const user = await requireUser()
+  const user = await requirePermission('remittance.execute')
   const sp = await searchParams
   const showDone = sp.done === '1'
 

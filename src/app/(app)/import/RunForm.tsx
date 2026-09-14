@@ -4,14 +4,23 @@ import { useActionState } from 'react'
 import { runImport, type ActionState } from './actions'
 import { SubmitButton, FormError } from '@/components/ui'
 
-export default function RunForm({
-  batchId, sheets, opsBaseYear, payrollYm, cnyDisplayRate, blocked,
-}: {
-  batchId: string
+/** 미리보기에서 정한 기준을 그대로 실행에 넘긴다 — 화면에 보인 것과 다른 조건으로 들어가면 안 된다 */
+export interface RunOptions {
   sheets: string[]
   opsBaseYear: number
   payrollYm: string
   cnyDisplayRate: string
+  blankRowsAreRemittance: boolean
+  remitFromRoute: string
+  usdKrwRate: string
+  officeFallbackDate: string
+}
+
+export default function RunForm({
+  batchId, options, blocked,
+}: {
+  batchId: string
+  options: RunOptions
   blocked: number
 }) {
   const [state, action] = useActionState<ActionState, FormData>(runImport, {})
@@ -23,10 +32,16 @@ export default function RunForm({
       <div className="card-body space-y-3">
         <FormError message={state.error} />
         <input type="hidden" name="batchId" value={batchId} />
-        {sheets.map((s) => <input key={s} type="hidden" name="sheets" value={s} />)}
-        <input type="hidden" name="opsBaseYear" value={opsBaseYear} />
-        <input type="hidden" name="payrollYm" value={payrollYm} />
-        <input type="hidden" name="cnyDisplayRate" value={cnyDisplayRate} />
+        {options.sheets.map((s) => <input key={s} type="hidden" name="sheets" value={s} />)}
+        <input type="hidden" name="opsBaseYear" value={options.opsBaseYear} />
+        <input type="hidden" name="payrollYm" value={options.payrollYm} />
+        <input type="hidden" name="cnyDisplayRate" value={options.cnyDisplayRate} />
+        <input type="hidden" name="remitFromRoute" value={options.remitFromRoute} />
+        <input type="hidden" name="usdKrwRate" value={options.usdKrwRate} />
+        <input type="hidden" name="officeFallbackDate" value={options.officeFallbackDate} />
+        {options.blankRowsAreRemittance && (
+          <input type="hidden" name="blankRowsAreRemittance" value="1" />
+        )}
         <p className="text-sm leading-relaxed text-ink-2">
           위에서 본 그대로 한 번에 넣습니다. 중간에 실패하면 아무것도 남지 않습니다.
           {blocked > 0 && (

@@ -12,7 +12,7 @@ const GROUPS: Group[] = [
   {
     items: [
       { href: '/', label: '대시보드', icon: '📊' },
-      { href: '/funds', label: '자금현황', icon: '💰' },
+      { href: '/funds', label: '자금현황', icon: '💰', perm: 'profit.view' },
     ],
   },
   {
@@ -25,9 +25,9 @@ const GROUPS: Group[] = [
   {
     title: '자금',
     items: [
-      { href: '/remittances', label: '해외송금', icon: '🌏' },
-      { href: '/transfers', label: '내부 자금이동', icon: '🔁' },
-      { href: '/invoices', label: '세금계산서', icon: '🧾' },
+      { href: '/remittances', label: '해외송금', icon: '🌏', perm: 'remittance.execute' },
+      { href: '/transfers', label: '내부 자금이동', icon: '🔁', perm: 'profit.view' },
+      { href: '/invoices', label: '세금계산서', icon: '🧾', perm: 'invoice.confirm' },
     ],
   },
   {
@@ -41,7 +41,7 @@ const GROUPS: Group[] = [
   {
     title: '관리',
     items: [
-      { href: '/import', label: '엑셀 가져오기', icon: '📥' },
+      { href: '/import', label: '엑셀 가져오기', icon: '📥', perm: 'settings.manage' },
       { href: '/settings', label: '설정', icon: '⚙️', perm: 'settings.manage' },
       { href: '/audit', label: '변경이력', icon: '📜', perm: 'audit.view' },
     ],

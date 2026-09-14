@@ -1,4 +1,4 @@
-import { requireUser } from '@/lib/session-guard'
+import { requirePermission } from '@/lib/session-guard'
 import { prisma } from '@/lib/db'
 import { fmtKrw, fmtCny, fmtRate, D } from '@/lib/money'
 import { fmtDate, plain } from '@/lib/serialize'
@@ -8,7 +8,7 @@ import TransferForm from './TransferForm'
 export const dynamic = 'force-dynamic'
 
 export default async function TransfersPage() {
-  const user = await requireUser()
+  const user = await requirePermission('profit.view')
 
   const [transfers, accounts] = await Promise.all([
     prisma.internalTransfer.findMany({

@@ -14,7 +14,7 @@
  *   ⑨ 배치를 되돌리면 남는 게 없다
  */
 import ExcelJS from 'exceljs'
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, Route } from '@prisma/client'
 import { readWorkbook } from '../src/lib/excel/read'
 import {
   buildPlan, SHEET_OVERSEAS, SHEET_GENERAL, SHEET_CORP, SHEET_OPS,
@@ -42,6 +42,8 @@ async function makeWorkbook(): Promise<Buffer> {
   ov.getRow(5).values = [null, '케이에스 글로벌', null, null, 1115.6]
   // 자사 자금이동
   ov.getRow(6).values = [new Date(2026, 4, 8), '이우드림', 86000, 582538]
+  // 거래처 칸이 비고 지출 없이 USD→CNY 만 있는 행 — 한국 통장 돈을 중국으로 보낸 것
+  ov.getRow(7).values = [new Date(2026, 4, 9), null, 50000, 338865]
 
   const gen = wb.addWorksheet(SHEET_GENERAL)
   gen.getRow(2).values = ['일자', '거래처', 'KRW 입금액', 'CNY(환율적용 192)', 'CNY(지출금액)', '대행통관비용', '인건비용', '기타비용', '마진', '%']
@@ -65,6 +67,8 @@ async function makeWorkbook(): Promise<Buffer> {
   ops.getRow(1).values = ['직원월급', '직원월급', null, '社保', null, '临时工费用', '临时工费用', null, null, '사무실 경비 ', '사무실 경비 ']
   ops.getRow(3).values = ['검증甲', 9500, 9500, null, null, '１２／２８－１／３', 5180, null, null, 46031, 10000]
   ops.getRow(4).values = ['검증乙', 8500, 8500, 1416]
+  // J열에 날짜 대신 내용이 적힌 사무실 경비 + 직원 없이 금액만 있는 사회보험
+  ops.getRow(2).values = [null, null, null, 777, null, null, null, null, null, '박스비8/9월', 11884]
   ops.getRow(5).values = ['合计：', 18000, 18000, 1416, null, null, 5180, null, null, null, 10000]
 
   wb.addWorksheet('Sheet3').getRow(2).values = ['더라임커머스', 112848]
@@ -95,13 +99,20 @@ async function main() {
   const opts = {
     sheets: [SHEET_OVERSEAS, SHEET_GENERAL, SHEET_CORP, SHEET_OPS],
     opsBaseYear: 2025, payrollYm: '2026-09', cnyDisplayRate: '218',
+    blankRowsAreRemittance: true, remitFromRoute: Route.BANK_CORP,
+    usdKrwRate: '1380', officeFallbackDate: '2026-09-30',
   }
   const plan = buildPlan(wb, opts)
 
   check('Sheet3 는 가져오지 않는다', plan.skipped.some((s) => s.sheet === 'Sheet3'), 'true')
-  check('자사 자금이동 1건', plan.transfers.length, 1)
+  check('중국 송금 2건 (이우드림 + 거래처 빈 행)', plan.transfers.length, 2)
   check('자금이동 CNY', plan.transfers[0].cny?.toString(), '582538')
   check('자금이동 USD/CNY 환율', plan.transfers[0].fxUsdCny?.toString(), '6.773698')
+  check('이우드림 행은 빈 행이 아니다', plan.transfers[0].fromBlankRow, 'false')
+  check('거래처 빈 행도 중국 송금', plan.transfers[1].fromBlankRow, 'true')
+  check('거래처 빈 행 CNY', plan.transfers[1].cny?.toString(), '338865')
+  check('빈 행은 주문이 되지 않는다',
+    plan.orders.some((o) => o.sheet === SHEET_OVERSEAS && o.rowIndex === 7), 'false')
   check('이우드림은 주문이 아니다',
     plan.orders.some((o) => o.partnerName.includes('이우드림')), 'false')
 
@@ -147,6 +158,19 @@ async function main() {
     receivable.expenses.reduce((s, e) => s.plus(e.cny), receivable.expenses[0].cny.mul(0)).toString(), '3550')
   check('미수금은 입금이 없다', receivable.receiptAmount, 'null')
 
+  const office = plan.opExpenses.filter((e) => e.categoryCode === 'OFFICE')
+  check('사무실 경비 2건', office.length, 2)
+  check('날짜 있는 행은 그 날짜', office.find((e) => e.cny.toString() === '10000')
+    ?.expenseDate?.toISOString().slice(0, 10), '2026-01-09')
+  const noDate = office.find((e) => e.cny.toString() === '11884')!
+  check('날짜 없는 행은 지정한 날짜로', noDate.expenseDate?.toISOString().slice(0, 10), '2026-09-30')
+  check('내용은 그대로 남는다', noDate.workDesc, '박스비8/9월')
+  check('날짜 없는 행도 막지 않는다', noDate.issues.some((i) => i.level === 'HOLD'), 'false')
+
+  const orphanIns = plan.opExpenses.find((e) => e.categoryCode === 'INSURANCE')!
+  check('직원 미지정 사회보험도 넣는다', orphanIns.cny.toString(), '777')
+  check('귀속월로 잡는다', orphanIns.expenseDate?.toISOString().slice(0, 10), '2026-09-01')
+
   const temp = plan.opExpenses.find((e) => e.categoryCode === 'TEMP_LABOR')!
   check('임시공 기간 시작', temp.periodFrom?.toISOString().slice(0, 10), '2025-12-28')
   check('임시공 금액', temp.cny.toString(), '5180')
@@ -168,7 +192,7 @@ async function main() {
   const r = await commitPlan(wb, plan, opts, 'verify-phase6.xlsx', admin.id, ctx)
 
   check('주문 생성', r.orders, 6)
-  check('내부 자금이동 생성', r.transfers, 1)
+  check('중국 송금 생성', r.transfers, 2)
   check('세금계산서 생성', r.invoices, 1)
   check('급여 생성', r.payrolls, 2)
 
@@ -208,10 +232,24 @@ async function main() {
       where: { batchId: BigInt(r.batchId), rawFormula: { not: undefined } },
     })) > 0, 'true')
 
+  console.log('\n━━ 2-1. 중국 송금 원화 처리 ━━')
+  const transfers = await prisma.internalTransfer.findMany({
+    where: { id: { in: (created.transfers ?? []).map(BigInt) } },
+    orderBy: { id: 'asc' },
+  })
+  const named = transfers.find((t) => t.cnyArrivalAmount?.toString() === '582538')!
+  const blank = transfers.find((t) => t.cnyArrivalAmount?.toString() === '338865')!
+  // 「이우드림」 행은 어느 통장에서 나갔는지 모른다 — 원화로 빼면 잔액이 틀어진다
+  check('이우드림 행은 원화 금액 없음', named.krwAmount, 'null')
+  check('이우드림 행은 출금계좌 없음', named.fromAccountId, 'null')
+  // 대표님 확인: 거래처 빈 행은 한국 통장에 모인 돈을 보낸 것
+  check('빈 행은 원화로 환산', blank.krwAmount?.toString(), '69000000')
+  check('빈 행은 출금계좌 지정', blank.fromAccountId !== null, 'true')
+
   console.log('\n━━ 3. 되돌리기 ━━')
   const undo = await rollbackBatch(BigInt(r.batchId), { ...ctx, reason: '검증' })
   check('주문 되돌림', undo.orders, 6)
-  check('자금이동 되돌림', undo.transfers, 1)
+  check('중국 송금 되돌림', undo.transfers, 2)
 
   const after = {
     orders: await prisma.order.count(),

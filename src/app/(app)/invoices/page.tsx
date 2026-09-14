@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { InvoiceStatus } from '@prisma/client'
-import { requireUser } from '@/lib/session-guard'
+import { requirePermission } from '@/lib/session-guard'
 import { prisma } from '@/lib/db'
 import { listUnbilledVat } from '@/lib/invoice-calc'
 import { fmtKrw, D } from '@/lib/money'
@@ -20,7 +20,7 @@ export default async function InvoicesPage({
 }: {
   searchParams: Promise<{ tab?: string; created?: string }>
 }) {
-  const user = await requireUser()
+  const user = await requirePermission('invoice.confirm')
   const sp = await searchParams
   const tab = sp.tab === 'unbilled' ? 'unbilled' : 'list'
 

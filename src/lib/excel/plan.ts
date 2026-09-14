@@ -92,6 +92,8 @@ export interface PlannedTransfer {
   usd: Prisma.Decimal | null
   cny: Prisma.Decimal | null
   fxUsdCny: Prisma.Decimal | null
+  /** 거래처 칸이 비어 있던 행인가 — 화면에서 따로 세어 보여준다 */
+  fromBlankRow: boolean
   issues: PlanIssue[]
 }
 
@@ -154,8 +156,9 @@ export const ISSUE_SUMMARY: Record<string, string> = {
   DATE_FILLED: '일자가 비어 바로 윗행의 날짜를 끌어왔습니다. 주문에 「추정」 표시가 붙습니다.',
   DATE_MISSING: '일자를 알 수 없고 끌어올 윗행도 없습니다.',
   PARTNER_MISSING: '거래처가 비어 있습니다.',
-  MAYBE_INTERNAL: '거래처가 비었고 지출도 없이 USD→CNY 만 있습니다. '
-    + '「이우드림」 자금이동 행과 모양이 같아 매출로 볼지 담당자가 정해야 합니다.',
+  MAYBE_INTERNAL: '거래처가 비었고 지출도 없이 USD→CNY 만 있습니다. 중국 송금 행으로 보입니다.',
+  INTERNAL_BLANK: '거래처 칸이 비어 있지만 한국 통장에 모인 돈을 중국으로 보낸 행입니다. '
+    + '매출이 아니라 중국 송금으로 넣습니다.',
   FX_DERIVED: 'D열에 수식이 없어 입금액 ÷ CNY 로 환율을 역산했습니다.',
   FX_MISSING: '환율 근거가 없습니다. 확인한 뒤에 넣어야 합니다.',
   FORMULA_XREF: 'D열 수식이 자기 행이 아닌 다른 행을 참조합니다.',
@@ -168,12 +171,20 @@ export const ISSUE_SUMMARY: Record<string, string> = {
   INTERNAL: '자사 계정입니다. 매출이 아니라 내부 자금이동으로 넣습니다.',
   PERIOD_YEAR_ASSUMED: '임시공 기간에 연도가 없어 기준연도로 읽었습니다.',
   PERIOD_UNPARSED: '임시공 기간을 날짜로 읽지 못했습니다.',
-  OFFICE_NO_DATE: 'J열이 날짜가 아니라 내용입니다. 지출일을 담당자가 지정해야 합니다.',
-  INSURANCE_ORPHAN: '사회보험 금액에 직원이 지정되지 않았습니다.',
+  OFFICE_NO_DATE: 'J열이 날짜가 아니라 내용입니다. 위 설정에서 정한 지출일로 넣습니다.',
+  INSURANCE_ORPHAN: '사회보험 금액에 직원이 지정되어 있지 않습니다. 급여 귀속월로 넣습니다.',
   NO_PAY: '이 달 급여가 비어 있습니다. 직원만 등록하고 급여는 만들지 않습니다.',
   NO_ACTUAL: '실지급(C)이 비어 기본급(B)을 실지급으로 씁니다.',
   BASE_NE_ACTUAL: '기본급 ≠ 실지급. 시스템은 실지급 기준으로 집계합니다.',
   USD_OUTLIER: 'USD 가 CNY 도착금액보다 큽니다. 자릿수를 확인해 주세요.',
+}
+
+/** Sheet1 항목이 어느 달에 들어가는지 — 「9月总合」 에 12~2월이 섞여 있어 따로 보여준다 */
+export interface OpsMonthRow {
+  ym: string
+  label: string
+  items: { category: string; count: number; cny: string }[]
+  totalCny: string
 }
 
 export interface ImportPlan {
@@ -186,7 +197,59 @@ export interface ImportPlan {
   mergeCandidates: { key: string; variants: { raw: string; count: number }[] }[]
   skipped: { sheet: string; rowCount: number; reason: string }[]
   totals: SheetTotals[]
+  opsMonths: OpsMonthRow[]
   counts: { ok: number; warn: number; error: number; hold: number; skip: number }
+}
+
+const OP_LABEL: Record<string, string> = {
+  SALARY: '직원 급여', INSURANCE: '사회보험', TEMP_LABOR: '임시공', OFFICE: '사무실 경비',
+}
+
+/**
+ * 중국 운영비를 귀속월별로 묶는다.
+ *
+ * 엑셀 Sheet1 은 제목이 `9月总合` 인데 임시공 기간은 12~1월, 사무실 경비 날짜는 1~2월,
+ * 거기에 8~9월 항목까지 섞여 있다. 한 달로 뭉뚱그리지 않고 각자 제 달로 보낸다 —
+ * 그래야 월별 대시보드의 운영비가 맞는다. 어느 달로 가는지 넣기 전에 보여 준다.
+ */
+function buildOpsMonths(
+  employees: PlannedEmployee[], opExpenses: PlannedOpExpense[], payrollYm: string,
+): OpsMonthRow[] {
+  const byYm = new Map<string, Map<string, { count: number; cny: Prisma.Decimal }>>()
+  const add = (ym: string, category: string, cny: Prisma.Decimal) => {
+    const cats = byYm.get(ym) ?? new Map()
+    const cur = cats.get(category) ?? { count: 0, cny: D(0) }
+    cur.count += 1
+    cur.cny = cur.cny.plus(cny)
+    cats.set(category, cur)
+    byYm.set(ym, cats)
+  }
+  const ymOf = (d: Date | null) =>
+    d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` : '(미상)'
+
+  for (const e of employees) {
+    if (e.actualPaid && e.actualPaid.gt(0)) add(payrollYm, 'SALARY', e.actualPaid)
+    if (e.insurance && e.insurance.gt(0)) add(payrollYm, 'INSURANCE', e.insurance)
+  }
+  for (const e of opExpenses) add(ymOf(e.expenseDate), e.categoryCode, e.cny)
+
+  return [...byYm.entries()]
+    .map(([ym, cats]) => {
+      const items = [...cats.entries()]
+        .map(([category, v]) => ({
+          category: OP_LABEL[category] ?? category, count: v.count, cny: fmt(v.cny),
+        }))
+        .sort((a, b) => a.category.localeCompare(b.category, 'ko'))
+      const total = [...cats.values()].reduce((s2, v) => s2.plus(v.cny), D(0))
+      const m = /^(\d{4})-(\d{2})$/.exec(ym)
+      return {
+        ym,
+        label: m ? `${m[1]}년 ${m[2]}월` : '지출일 미상',
+        items,
+        totalCny: fmt(total),
+      }
+    })
+    .sort((a, b) => a.ym.localeCompare(b.ym))
 }
 
 export interface PlanOptions {
@@ -203,6 +266,19 @@ export interface PlanOptions {
    * 프로그램이 지어내지 않고 담당자가 넣은 값을 그대로 기록한다.
    */
   cnyDisplayRate: string
+  /**
+   * 거래처 칸이 비고 지출 없이 USD→CNY 만 있는 행을 중국 송금으로 넣을 것인가.
+   *
+   * 대표님 확인: 법인·일반·사이트 통장에 모인 돈을 중국으로 보낸 내용입니다.
+   * 매출로 잡으면 거래액이 CNY 5,654,262 만큼 부풀어 오르므로 기본으로 켜 둡니다.
+   */
+  blankRowsAreRemittance: boolean
+  /** 중국 송금이 빠져나간 한국 계좌 */
+  remitFromRoute: Route | null
+  /** 송금액을 원화로 환산할 USD→KRW 환율. 비우면 원화 금액을 기록하지 않는다 */
+  usdKrwRate: string
+  /** 날짜 대신 내용이 적힌 사무실 경비에 쓸 지출일 */
+  officeFallbackDate: string
 }
 
 const cell = (cells: Cell[], i: number): Cell => cells[i] ?? { value: null, formula: null }
@@ -299,7 +375,7 @@ function collectCosts(cells: Cell[], cols: CostCols): PlannedExpense[] {
  * ⭐ B열이 `이우드림` 인 행은 매출이 아니라 자사 자금이동이다. 주문을 만들지 않는다.
  */
 function planOverseas(
-  sheet: SheetData, pc: PartnerCollector,
+  sheet: SheetData, pc: PartnerCollector, opts: PlanOptions,
 ): { orders: PlannedOrder[]; transfers: PlannedTransfer[]; skippedRows: number } {
   const orders: PlannedOrder[] = []
   const transfers: PlannedTransfer[] = []
@@ -330,32 +406,39 @@ function planOverseas(
     const arrivalRaw = positive(cell(cells, 3).value)
     const arrival = arrivalRaw ? money(arrivalRaw) : null
 
-    if (!partnerRaw) {
-      if (!arrival && collectCosts(cells, costCols).length === 0) { skippedRows++; continue }
+    const isNamedInternal = !!partnerRaw && partnerRaw.replace(/\s/g, '') === INTERNAL_NAME
+    const hasCosts = collectCosts(cells, costCols).length > 0
+
+    // ⭐ 거래처 칸이 비었는데 USD·CNY 만 있고 지출이 없는 행.
+    //    대표님 확인: 법인·일반·사이트 통장에 모인 돈을 중국으로 보낸 것입니다.
+    //    「이우드림」 이라고 적힌 행과 같은 내용인데 이름만 빠뜨린 것이라, 같이 처리합니다.
+    const looksLikeRemit = !partnerRaw && !!usd && !!arrival && !hasCosts
+    const isBlankInternal = looksLikeRemit && opts.blankRowsAreRemittance
+
+    if (!partnerRaw && !isBlankInternal) {
+      if (!arrival && !hasCosts) { skippedRows++; continue }
       err(ctx, 'PARTNER_MISSING', '거래처가 비어 있습니다.')
-      // ⭐ 거래처가 비었는데 USD·CNY 만 있고 지출이 없는 행은 `이우드림` 자금이동 행과 모양이 같다.
-      //    (USD ÷ CNY 가 6.7 대, 지출 0건) 하지만 프로그램이 단정하지 않는다 —
-      //    매출로 넣느냐 자금이동으로 빼느냐에 따라 거래액이 크게 달라지므로 사람이 고르게 한다.
-      if (usd && arrival && collectCosts(cells, costCols).length === 0) {
-        const ratio = arrival.div(usd)
-        if (ratio.gte(D('6.4')) && ratio.lte(D('7.2'))) {
-          hold(ctx, 'MAYBE_INTERNAL',
-            `USD ${usd.toString()} → CNY ${arrival.toString()} (환율 ${ratio.toDecimalPlaces(4).toString()}), `
-            + '지출 없음 — 거래처 이름만 빠진 「이우드림」 자금이동 행과 모양이 같습니다. '
-            + '매출로 볼지 내부 자금이동으로 뺄지 담당자가 정해야 합니다.')
-        }
+      if (looksLikeRemit) {
+        hold(ctx, 'MAYBE_INTERNAL',
+          `USD ${usd!.toString()} → CNY ${arrival!.toString()}, 지출 없음 — 중국 송금 행으로 보입니다. `
+          + '위 설정에서 「거래처가 빈 송금 행도 중국 송금으로 넣기」 를 켜시면 들어갑니다.')
       }
     }
 
-    // ⭐ 자사 자금이동
-    if (partnerRaw && partnerRaw.replace(/\s/g, '') === INTERNAL_NAME) {
-      const tIssues: PlanIssue[] = [...ctx.issues, {
-        level: 'INFO' as const, code: 'INTERNAL',
-        message: '자사 계정입니다. 매출이 아니라 내부 자금이동으로 넣습니다.',
+    // ⭐ 회사 돈을 중국으로 보낸 것 — 매출이 아니다
+    if (isNamedInternal || isBlankInternal) {
+      const tIssues: PlanIssue[] = [...ctx.issues.filter((i) => i.code !== 'PARTNER_MISSING'), {
+        level: 'INFO' as const,
+        code: isNamedInternal ? 'INTERNAL' : 'INTERNAL_BLANK',
+        message: isNamedInternal
+          ? '자사 계정입니다. 매출이 아니라 중국 송금(내부 자금이동)으로 넣습니다.'
+          : '거래처가 비어 있고 지출 없이 USD→CNY 만 있습니다. '
+            + '한국 통장에 모인 돈을 중국으로 보낸 것으로 보아 중국 송금으로 넣습니다.',
       }]
       transfers.push({
         rowIndex, date: orderDate, dateEstimated, usd, cny: arrival,
         fxUsdCny: usd && arrival && usd.gt(0) ? arrival.div(usd).toDecimalPlaces(6) : null,
+        fromBlankRow: isBlankInternal,
         issues: tIssues,
       })
       continue
@@ -606,12 +689,22 @@ function planCorp(
  * ⭐ 엑셀 합계는 기본급(B) 기준인데 실제로 나간 돈은 실지급(C)이다. 시스템은 C를 쓴다.
  *    그래서 합계가 4,850 CNY 차이나며, 이는 오류가 아니라 의도된 차이다.
  */
+/** `2026-09` → 그 달 1일. 귀속월만 정해지면 날짜는 여기서 만든다 */
+function payrollMonthDate(ym: string): Date | null {
+  const m = /^(\d{4})-(\d{2})$/.exec(ym)
+  if (!m) return null
+  return new Date(Number(m[1]), Number(m[2]) - 1, 1)
+}
+
 function planOps(
   sheet: SheetData, opts: PlanOptions,
 ): { employees: PlannedEmployee[]; opExpenses: PlannedOpExpense[]; skippedRows: number } {
   const employees: PlannedEmployee[] = []
   const opExpenses: PlannedOpExpense[] = []
   let skippedRows = 0
+  // 임시공 기간은 위에서 아래로 이어진다. 앞 기간의 끝을 들고 다니며 해 넘김을 판단한다
+  let periodYear = opts.opsBaseYear
+  let lastPeriodEnd: Date | null = null
 
   for (const { rowIndex, cells } of dataRows(sheet, 1)) {
     const first = text(cell(cells, 0).value)
@@ -650,16 +743,17 @@ function planOps(
         issues: eIssues,
       })
     } else if (insurance) {
-      // D2 의 1,416 처럼 직원 없이 금액만 있는 칸
-      ctx.issues.push({
-        level: 'HOLD', code: 'INSURANCE_ORPHAN',
-        message: `사회보험 ${insurance.toString()} 에 직원이 지정되지 않았습니다. 담당자가 지정해야 합니다.`,
-      })
+      // D2 의 1,416 처럼 직원 없이 금액만 있는 칸.
+      // 막아 버리면 사회보험 합계가 엑셀과 안 맞는다. 넣되 「직원 미지정」 이라고 남긴다.
       opExpenses.push({
         rowIndex, categoryCode: 'INSURANCE', cny: insurance,
-        expenseDate: null, dateEstimated: false,
-        workDesc: '직원 미지정 사회보험', periodFrom: null, periodTo: null, periodRaw: null,
-        issues: ctx.issues.slice(),
+        expenseDate: payrollMonthDate(opts.payrollYm), dateEstimated: true,
+        workDesc: '사회보험 (직원 미지정)', periodFrom: null, periodTo: null, periodRaw: null,
+        issues: [{
+          level: 'WARN', code: 'INSURANCE_ORPHAN',
+          message: `사회보험 ${insurance.toString()} 에 직원이 지정되어 있지 않습니다. `
+            + '금액은 그대로 넣고 급여 귀속월로 잡습니다. 누구 것인지 확인되면 고쳐 주세요.',
+        }],
       })
     }
 
@@ -670,13 +764,22 @@ function planOps(
       const tIssues: PlanIssue[] = []
       let from: Date | null = null, to: Date | null = null
       if (periodRaw) {
-        const p = parsePeriod(periodRaw, opts.opsBaseYear)
+        // 엑셀의 임시공 기간은 연달아 이어지는 주다 (12/28-1/3, 1/4-1/10, …).
+        // 기준연도를 행마다 그대로 쓰면 12/28 은 2026년 1월로 넘어가고 그 다음 1/4 는
+        // 2025년 1월로 돌아가 버린다 — 한 해가 벌어진다.
+        // 앞 기간보다 뒤에 오도록 필요한 만큼 해를 넘긴다.
+        let p = parsePeriod(periodRaw, periodYear)
+        if (p && lastPeriodEnd && p.from < lastPeriodEnd) {
+          periodYear += 1
+          p = parsePeriod(periodRaw, periodYear)
+        }
         if (p) {
           from = p.from; to = p.to
+          lastPeriodEnd = p.to
           tIssues.push({
             level: 'WARN', code: 'PERIOD_YEAR_ASSUMED',
-            message: `기간 "${periodRaw}" 에 연도가 없어 ${opts.opsBaseYear}년 기준으로 읽었습니다 `
-              + `(${from.toISOString().slice(0, 10)} ~ ${to.toISOString().slice(0, 10)}).`,
+            message: `기간 "${periodRaw}" 에 연도가 없어 ${from.toISOString().slice(0, 10)} ~ `
+              + `${to.toISOString().slice(0, 10)} 로 읽었습니다 (기준연도 ${opts.opsBaseYear}).`,
           })
         } else {
           tIssues.push({
@@ -702,17 +805,23 @@ function planOps(
       const asDate = typeof officeRaw === 'number' || officeRaw instanceof Date
         ? toDate(officeRaw) : null
       const asText = asDate ? null : text(officeRaw)
+      // J열에 날짜 대신 「박스비8/9월」 같은 내용이 적힌 행이 있다.
+      // 금액은 분명히 나간 돈이므로 버리지 않는다. 담당자가 정한 날짜로 넣고 내용은 그대로 남긴다.
+      const fallback = asDate ? null : toDate(opts.officeFallbackDate)
       if (!asDate) {
         oIssues.push({
-          level: 'HOLD', code: 'OFFICE_NO_DATE',
-          message: asText
-            ? `J열이 날짜가 아니라 "${asText}" 라는 내용입니다. 지출일을 담당자가 지정해야 합니다.`
-            : 'J열이 비어 지출일을 알 수 없습니다.',
+          level: fallback ? 'WARN' : 'HOLD', code: 'OFFICE_NO_DATE',
+          message: (asText
+            ? `J열이 날짜가 아니라 "${asText}" 라는 내용입니다.`
+            : 'J열이 비어 지출일을 알 수 없습니다.')
+            + (fallback
+              ? ` 위 설정의 지출일(${fallback.toISOString().slice(0, 10)})로 넣고 내용은 그대로 남깁니다.`
+              : ' 위 설정에서 지출일을 정해 주시면 넣습니다.'),
         })
       }
       opExpenses.push({
         rowIndex, categoryCode: 'OFFICE', cny: officeAmt,
-        expenseDate: asDate, dateEstimated: false,
+        expenseDate: asDate ?? fallback, dateEstimated: !asDate,
         workDesc: asText ?? '사무실 경비',
         periodFrom: null, periodTo: null, periodRaw: null,
         issues: oIssues,
@@ -924,6 +1033,25 @@ function buildTotals(
   return out
 }
 
+/**
+ * 거래처 칸이 비고 지출 없이 USD→CNY 만 있는 행을 세어 본다.
+ * 설정 화면에서 「이런 행이 N건, CNY 얼마」 라고 보여 주기 위해서다 — 미리보기 전에도 보여야 한다.
+ */
+export function scanBlankRemitRows(wb: WorkbookData): { count: number; cny: string } {
+  const sheet = wb.sheets.find((x) => x.name === SHEET_OVERSEAS)
+  if (!sheet) return { count: 0, cny: '0' }
+  let count = 0
+  let total = D(0)
+  for (const { cells } of dataRows(sheet, 3)) {
+    if (text(cell(cells, 1).value)) continue
+    const usd = positive(cell(cells, 2).value)
+    const cny = positive(cell(cells, 3).value)
+    const hasCosts = [4, 5, 6].some((i) => positive(cell(cells, i).value) !== null)
+    if (usd && cny && !hasCosts) { count++; total = total.plus(cny) }
+  }
+  return { count, cny: fmt(total) }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 계획 만들기
 // ─────────────────────────────────────────────────────────────────────
@@ -948,7 +1076,7 @@ export function buildPlan(wb: WorkbookData, opts: PlanOptions): ImportPlan {
     }
     switch (sheet.name) {
       case SHEET_OVERSEAS: {
-        const r = planOverseas(sheet, pc)
+        const r = planOverseas(sheet, pc, opts)
         orders = orders.concat(r.orders)
         transfers = transfers.concat(r.transfers)
         if (r.skippedRows) skipped.push({ sheet: sheet.name, rowCount: r.skippedRows, reason: '빈 행' })
@@ -1027,6 +1155,8 @@ export function buildPlan(wb: WorkbookData, opts: PlanOptions): ImportPlan {
   return {
     orders, transfers, employees, opExpenses, partners, mergeCandidates, skipped,
     totals: buildTotals(wb, orders, transfers, employees, opExpenses, opts.sheets),
+    opsMonths: opts.sheets.includes(SHEET_OPS)
+      ? buildOpsMonths(employees, opExpenses, opts.payrollYm) : [],
     counts,
   }
 }

@@ -6,6 +6,7 @@ import { ImportStatus } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { requirePermission, auditContext } from '@/lib/session-guard'
 import { readWorkbook } from '@/lib/excel/read'
+import { Route } from '@prisma/client'
 import {
   buildPlan, SHEET_OVERSEAS, SHEET_GENERAL, SHEET_CORP, SHEET_OPS,
   type PlanOptions,
@@ -96,11 +97,18 @@ function readOptions(fd: FormData): PlanOptions {
   }
   const sheets = fd.getAll('sheets').filter((v): v is string => typeof v === 'string')
   const year = Number(get('opsBaseYear'))
+  const route = get('remitFromRoute')
+  const isRoute = (v: string | null): v is Route =>
+    v !== null && (Object.values(Route) as string[]).includes(v)
   return {
     sheets: sheets.length ? sheets : [SHEET_OVERSEAS, SHEET_GENERAL, SHEET_CORP, SHEET_OPS],
     opsBaseYear: Number.isFinite(year) && year > 2000 && year < 2100 ? year : new Date().getFullYear(),
     payrollYm: /^\d{4}-\d{2}$/.test(get('payrollYm') ?? '') ? get('payrollYm')! : '',
     cnyDisplayRate: get('cnyDisplayRate') ?? '',
+    blankRowsAreRemittance: get('blankRowsAreRemittance') !== null,
+    remitFromRoute: isRoute(route) ? route : Route.BANK_CORP,
+    usdKrwRate: get('usdKrwRate') ?? '',
+    officeFallbackDate: get('officeFallbackDate') ?? '',
   }
 }
 

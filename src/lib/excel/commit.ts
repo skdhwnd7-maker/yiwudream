@@ -46,6 +46,8 @@ export interface CommitResult {
   opExpenses: number
   rows: number
   skippedOrders: number
+  /** 이관 결과로 계산된 통장 잔액 — 실제 잔액과 맞는지 바로 확인하시라고 같이 남긴다 */
+  balances: { name: string; currency: string; balance: string }[]
 }
 
 /** 가져오지 않는 행 — 사람이 먼저 고쳐야 한다 */
@@ -108,6 +110,7 @@ export async function commitPlan(
   const result: CommitResult = {
     batchId: '', partners: 0, orders: 0, receipts: 0, expenses: 0, invoices: 0,
     transfers: 0, employees: 0, payrolls: 0, opExpenses: 0, rows: 0, skippedOrders: 0,
+    balances: [],
   }
 
   // 해외송금은 CNY 정산이라 행마다 환율이 없다. 원화 표시용 환산율은 담당자가 넣은 값을 쓴다
@@ -300,23 +303,51 @@ export async function commitPlan(
       }
     }
 
-    // ── 내부 자금이동
-    const corpAcc = accounts.get(Route.BANK_CORP)
+    // ── 중국 송금 (내부 자금이동)
+    //
+    // 대표님 확인: 법인·일반·사이트 통장에 모인 돈을 중국으로 보낸 것입니다.
+    // 어느 통장에서 나갔는지는 엑셀에 없어 담당자가 고른 계좌 하나로 기록하고,
+    // 원화 금액도 없어 담당자가 넣은 USD→KRW 환율로 환산합니다.
+    // 환율을 안 넣으시면 원화 금액을 비워 둡니다 — 지어내지 않습니다.
+    const remitFrom = opts.remitFromRoute
+      ? accounts.get(opts.remitFromRoute) : accounts.get(Route.BANK_CORP)
     const cnAcc = cnAccount
+    const usdKrw = opts.usdKrwRate && Number(opts.usdKrwRate) > 0 ? D(opts.usdKrwRate) : null
     for (const t of plan.transfers) {
-      if (!t.date || !corpAcc || !cnAcc) {
+      if (!t.date || !remitFrom || !cnAcc) {
         await markRow(tx, batch.id, '해외송금', t.rowIndex, ImportRowStatus.ERROR, null, null,
-          '일자나 계좌가 없어 내부 자금이동을 만들지 못했습니다.')
+          '일자나 계좌가 없어 중국 송금을 만들지 못했습니다.')
         continue
       }
+      // 원화 금액은 「한국 통장에 모인 돈을 보낸 행」 에만 매긴다.
+      // 대표님이 지목하신 것이 그 행들이다. 「이우드림」 이라고 적힌 행까지 원화로 빼면
+      // 한국 통장에서 나간 돈이 들어온 돈보다 커져 잔액이 마이너스가 된다.
+      const chargesKoreanAccount = t.fromBlankRow
+      const krw = usdKrw && t.usd && chargesKoreanAccount
+        ? t.usd.mul(usdKrw).toDecimalPlaces(0) : null
       const transferNo = await nextDocNo(tx, 'IT', t.date)
       const it = await tx.internalTransfer.create({
         data: {
           transferNo, transferDate: t.date,
           fromEntity: 'KR', toEntity: 'CN',
-          fromAccountId: corpAcc.id, toAccountId: cnAcc.id,
+          fromAccountId: chargesKoreanAccount ? remitFrom.id : null,
+          toAccountId: cnAcc.id,
+          krwAmount: krw,
           usdAmount: t.usd, cnyArrivalAmount: t.cny, fxRateUsdCny: t.fxUsdCny,
-          purpose: '엑셀 이관 — 자사 자금이동', createdBy: userId,
+          // purpose 는 VarChar(30) 이다. 자세한 내용은 memo 에 쓴다
+          purpose: '엑셀 이관 — 중국 송금',
+          memo: [
+            `엑셀 해외송금 ${t.rowIndex}행`,
+            t.fromBlankRow ? '(거래처 칸이 비어 있던 행 — 중국 송금으로 처리)' : null,
+            krw
+              ? `원화 금액은 USD ${t.usd!.toString()} × ${usdKrw!.toString()} 로 환산했습니다.`
+                + ' 엑셀에 원화 기록이 없어 담당자가 넣은 환율을 씁니다.'
+              : chargesKoreanAccount
+                ? '원화 환율을 넣지 않아 원화 금액을 비워 두었습니다. 통장 잔액을 맞추려면 채워 주세요.'
+                : '「이우드림」 이라고 적힌 행입니다. 어느 통장에서 나갔는지 엑셀에 없어'
+                  + ' 출금 계좌와 원화 금액을 비워 두었습니다.',
+          ].filter(Boolean).join(' '),
+          createdBy: userId,
         },
       })
       result.transfers++
@@ -429,6 +460,28 @@ export async function commitPlan(
       })
       result.opExpenses++
       created.opExpenses.push(opEx.id.toString())
+    }
+
+    // 넣고 난 잔액을 그 자리에서 계산해 남긴다. 실제 통장과 다르면 기초잔액으로 맞춰야 한다
+    for (const a of [...accounts.values()]) {
+      const [inflow, outflow, remitIn, transferOut] = await Promise.all([
+        tx.receipt.aggregate({ where: { accountId: a.id, isVoid: false }, _sum: { amount: true } }),
+        tx.expense.aggregate({
+          where: { accountId: a.id, isVoid: false, paymentStatus: 'PAID' }, _sum: { amount: true },
+        }),
+        tx.internalTransfer.aggregate({
+          where: { toAccountId: a.id, isVoid: false }, _sum: { cnyArrivalAmount: true },
+        }),
+        tx.internalTransfer.aggregate({
+          where: { fromAccountId: a.id, isVoid: false }, _sum: { krwAmount: true },
+        }),
+      ])
+      let bal = D(a.openingBalance).plus(inflow._sum.amount ?? 0).minus(outflow._sum.amount ?? 0)
+      if (a.currency === 'CNY') bal = bal.plus(remitIn._sum.cnyArrivalAmount ?? 0)
+      else bal = bal.minus(transferOut._sum.krwAmount ?? 0)
+      result.balances.push({
+        name: a.name, currency: a.currency, balance: bal.toDecimalPlaces(2).toString(),
+      })
     }
 
     await tx.importBatch.update({

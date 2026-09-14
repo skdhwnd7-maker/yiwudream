@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { requireUser } from '@/lib/session-guard'
+import { requirePermission } from '@/lib/session-guard'
 import { fundsSnapshot, latestFxRate } from '@/lib/funds'
 import { fmtKrw, fmtCny, D } from '@/lib/money'
 import { fmtDate } from '@/lib/serialize'
@@ -12,7 +12,7 @@ export default async function FundsPage({
 }: {
   searchParams: Promise<{ asOf?: string }>
 }) {
-  await requireUser()
+  await requirePermission('profit.view')
   const sp = await searchParams
   const asOf = sp.asOf ? new Date(`${sp.asOf}T23:59:59`) : undefined
 

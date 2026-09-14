@@ -12,6 +12,8 @@ const KNOWN_HELP: Record<string, string> = {
 
 export default function OptionsForm({
   batchId, sheets, chosen, opsBaseYear, payrollYm, cnyDisplayRate,
+  blankRowsAreRemittance, remitFromRoute, usdKrwRate, officeFallbackDate,
+  blankRowCount, blankRowCny, accounts,
 }: {
   batchId: string
   sheets: { name: string; rows: number; known: boolean }[]
@@ -19,9 +21,19 @@ export default function OptionsForm({
   opsBaseYear: number
   payrollYm: string
   cnyDisplayRate: string
+  blankRowsAreRemittance: boolean
+  remitFromRoute: string
+  usdKrwRate: string
+  officeFallbackDate: string
+  blankRowCount: number
+  blankRowCny: string
+  accounts: { name: string; route: string }[]
 }) {
   const [picked, setPicked] = useState<string[]>(chosen)
+  const [asRemit, setAsRemit] = useState(blankRowsAreRemittance)
   const needsOps = picked.includes('Sheet1')
+  const needsOverseas = picked.includes('해외송금')
+  const num = (v: string) => Number(v.replace(/,/g, ''))
 
   const toggle = (name: string) =>
     setPicked((p) => (p.includes(name) ? p.filter((x) => x !== name) : [...p, name]))
@@ -61,6 +73,31 @@ export default function OptionsForm({
           ))}
         </div>
 
+        {needsOverseas && blankRowCount > 0 && (
+          <div className="rounded border border-gold bg-gold-soft px-3 py-3">
+            <label className="mb-0 flex items-start gap-3">
+              <input
+                type="checkbox" name="blankRowsAreRemittance" value="1"
+                checked={asRemit} onChange={(e) => setAsRemit(e.target.checked)}
+                className="mt-1"
+              />
+              <span className="min-w-0">
+                <span className="text-sm font-medium">
+                  거래처가 빈 송금 행 {blankRowCount}건도 중국 송금으로 넣기
+                </span>
+                <span className="mt-1 block text-xs leading-relaxed text-ink-2">
+                  거래처 칸이 비어 있고 지출 없이 USD→CNY 만 있는 행이 {blankRowCount}건,
+                  합 <strong>CNY {blankRowCny}</strong> 있습니다.
+                  법인·일반·사이트 통장에 모인 돈을 중국으로 보낸 내용이라
+                  「이우드림」 이라고 적힌 행과 같이 처리합니다.
+                  <strong> 매출로 잡으면 거래액이 그만큼 부풀어 오릅니다.</strong>
+                  {' '}끄시면 넣지 않고 한 행씩 보여 드립니다.
+                </span>
+              </span>
+            </label>
+          </div>
+        )}
+
         <div className="grid gap-4 sm:grid-cols-3">
           <Field
             label="해외송금 원화 환산환율" name="cnyDisplayRate" required
@@ -71,6 +108,29 @@ export default function OptionsForm({
               defaultValue={cnyDisplayRate} placeholder="218" className="num"
             />
           </Field>
+
+          {needsOverseas && (
+            <>
+              <Field
+                label="중국 송금이 빠져나간 통장" name="remitFromRoute"
+                hint="엑셀에 어느 통장에서 나갔는지 없어 한 곳으로 기록합니다. 나중에 내부 자금이동 화면에서 건별로 고칠 수 있습니다."
+              >
+                <select id="remitFromRoute" name="remitFromRoute" defaultValue={remitFromRoute}>
+                  {accounts.map((a) => (
+                    <option key={a.route} value={a.route}>{a.name}</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field
+                label="송금 USD→KRW 환율" name="usdKrwRate"
+                hint="엑셀에 원화 금액이 없습니다. 넣으시면 통장에서 그만큼 빠져나간 것으로 기록해 잔액이 맞아집니다. 비우시면 원화 금액을 비워 둡니다."
+              >
+                <input id="usdKrwRate" name="usdKrwRate" inputMode="decimal"
+                  defaultValue={usdKrwRate} placeholder="1380" className="num" />
+              </Field>
+            </>
+          )}
 
           {needsOps && (
             <>
@@ -87,6 +147,14 @@ export default function OptionsForm({
               >
                 <input id="opsBaseYear" name="opsBaseYear" type="number" min="2000" max="2100"
                   defaultValue={opsBaseYear} className="num" />
+              </Field>
+
+              <Field
+                label="날짜 없는 사무실 경비의 지출일" name="officeFallbackDate"
+                hint="J열에 날짜 대신 「박스비8/9월」 처럼 내용이 적힌 행이 있습니다. 금액은 분명히 나간 돈이라 버리지 않습니다. 정해 주시면 그 날짜로 넣고 내용은 그대로 남깁니다."
+              >
+                <input id="officeFallbackDate" name="officeFallbackDate" type="date"
+                  defaultValue={officeFallbackDate} />
               </Field>
             </>
           )}

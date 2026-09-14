@@ -6,6 +6,7 @@ import { fmtKrw, fmtCny, fmtPercent, D } from '@/lib/money'
 import { can } from '@/lib/permissions'
 import MiniBars from '@/components/MiniBars'
 import RouteBars from '@/components/RouteBars'
+import StaffHome from './StaffHome'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,6 +26,10 @@ export default async function DashboardPage({
   searchParams: Promise<{ ym?: string }>
 }) {
   const user = await requireUser()
+  // 입력만 하는 직원에게는 회사 손익 대신 「오늘 할 일」 화면을 보여 준다
+  if (!can(user.role, 'profit.view')) {
+    return <StaffHome userId={BigInt(user.id)} userName={user.name} />
+  }
   const sp = await searchParams
   const ym = /^\d{4}-\d{2}$/.test(sp.ym ?? '') ? sp.ym! : currentYm()
 

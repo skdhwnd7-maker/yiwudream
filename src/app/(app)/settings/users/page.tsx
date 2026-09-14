@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { Role } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { Field } from '@/components/Field'
@@ -5,17 +6,22 @@ import { ROLE_LABEL } from '@/lib/auth'
 import { fmtDateTime } from '@/lib/serialize'
 import { saveUser, toggleUserActive } from '../actions'
 import { InlineEditor, AddPanel, ToggleButton } from '../EditableRow'
+import RolePicker from './RolePicker'
 
 export const dynamic = 'force-dynamic'
 
 const PERMISSION_ROWS: { label: string; min: Role }[] = [
+  { label: '거래 목록·상세 조회', min: Role.VIEWER },
   { label: '거래 등록·수정', min: Role.STAFF },
+  { label: '거래처 등록·수정', min: Role.STAFF },
+  { label: '회사 손익·자금현황', min: Role.MANAGER },
   { label: '거래 취소', min: Role.MANAGER },
   { label: '해외송금 실행', min: Role.MANAGER },
   { label: '세금계산서 확정', min: Role.MANAGER },
   { label: '급여 조회·입력', min: Role.MANAGER },
   { label: '변경이력 조회', min: Role.MANAGER },
   { label: '설정·사용자관리', min: Role.OWNER },
+  { label: '엑셀 가져오기', min: Role.OWNER },
 ]
 const RANK: Record<Role, number> = { VIEWER: 0, STAFF: 1, MANAGER: 2, OWNER: 3 }
 const ROLES: Role[] = [Role.OWNER, Role.MANAGER, Role.STAFF, Role.VIEWER]
@@ -29,15 +35,11 @@ function Fields({ u, isNew }: { u?: { loginId: string; name: string; role: Role 
       <Field label="이름" name="name" required>
         <input name="name" defaultValue={u?.name ?? ''} required />
       </Field>
-      <Field label="권한" name="role">
-        <select name="role" defaultValue={u?.role ?? Role.STAFF}>
-          {ROLES.map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
-        </select>
-      </Field>
       <Field label={isNew ? '비밀번호' : '비밀번호 재설정'} name="password"
         hint={isNew ? '8자 이상' : '비워두면 그대로 둡니다'}>
         <input name="password" type="password" autoComplete="new-password" minLength={isNew ? 8 : 0} required={isNew} />
       </Field>
+      <RolePicker defaultRole={u?.role ?? Role.STAFF} />
     </div>
   )
 }
@@ -92,6 +94,12 @@ export default async function UsersPage() {
 
       <div className="card">
         <div className="card-head"><h2 className="text-sm font-semibold">권한 범위</h2></div>
+        <div className="card-body hint">
+          입력만 하실 직원은 <strong>직원</strong>으로 두시면 됩니다 — 거래는 넣고 고칠 수 있지만
+          회사 마진과 통장 잔액은 보이지 않습니다.
+          누가 무엇을 언제 고쳤는지는 권한과 상관없이 전부{' '}
+          <Link href="/audit" className="underline">변경이력</Link>에 남습니다.
+        </div>
         <div className="table-wrap border-0">
           <table>
             <thead>

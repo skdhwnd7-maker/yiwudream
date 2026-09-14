@@ -6,9 +6,11 @@ import { prisma } from '@/lib/db'
 import { fmtDateTime } from '@/lib/serialize'
 import { readWorkbook } from '@/lib/excel/read'
 import {
-  buildPlan, ISSUE_SUMMARY, SHEET_OVERSEAS, SHEET_GENERAL, SHEET_CORP, SHEET_OPS,
+  buildPlan, scanBlankRemitRows, ISSUE_SUMMARY,
+  SHEET_OVERSEAS, SHEET_GENERAL, SHEET_CORP, SHEET_OPS,
   type ImportPlan, type PlanIssue,
 } from '@/lib/excel/plan'
+import { Route } from '@prisma/client'
 import { readUpload, hasUpload } from '../storage'
 import RunForm from '../RunForm'
 import UndoForm from '../UndoForm'
@@ -56,6 +58,7 @@ export default async function ImportBatchPage({
       label: string; rows: { item: string; excel: string; system: string }[]; note?: string
     }[]
     const n = (k: string) => Number(summary?.[k] ?? 0).toLocaleString('ko-KR')
+    const balances = (summary?.balances ?? []) as { name: string; currency: string; balance: string }[]
     return (
       <div className="mx-auto max-w-4xl space-y-5">
         <header className="flex items-end justify-between gap-3">
@@ -87,12 +90,50 @@ export default async function ImportBatchPage({
               </div>
             </div>
 
+            {balances.length > 0 && (
+              <div className="card">
+                <div className="card-head">
+                  <h2 className="text-sm font-semibold">이관 결과 통장 잔액</h2>
+                  <Link href="/settings/accounts" className="text-xs no-underline hover:underline">
+                    기초잔액 넣기 →
+                  </Link>
+                </div>
+                <div className="overflow-x-auto">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>통장</th>
+                        <th className="w-20">통화</th>
+                        <th className="w-40 text-right">엑셀대로 계산한 잔액</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {balances.map((b) => (
+                        <tr key={b.name}>
+                          <td className="text-sm">{b.name}</td>
+                          <td className="text-xs text-ink-muted">{b.currency}</td>
+                          <td className="text-right font-mono text-xs">
+                            {Number(b.balance).toLocaleString('ko-KR')}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="card-foot text-xs leading-relaxed text-ink-3">
+                  엑셀에 적힌 입금과 지출만으로 계산한 값입니다.
+                  <strong> 실제 통장 잔액과 대조해 보시고 다르면 그 차액을 기초잔액으로 넣어 주세요.</strong>
+                  {' '}차이가 난다면 엑셀에 적히지 않은 돈이 오갔다는 뜻입니다.
+                </div>
+              </div>
+            )}
+
             <div className="card border-gold bg-gold-soft">
               <div className="card-body space-y-2 text-sm leading-relaxed text-ink-2">
                 <p className="font-semibold">가져오기 다음에 꼭 하실 일</p>
                 <p>
-                  ① <Link href="/settings/accounts" className="underline">계좌 기초잔액</Link>을 넣어 주세요.
-                  엑셀에는 한국에서 중국으로 보낸 송금 기록이 없어서, 지금 통장 잔액이 실제보다 크게 잡혀 있습니다.
+                  ① 위 <strong>통장 잔액</strong>을 실제 통장과 대조해 보시고, 다르면{' '}
+                  <Link href="/settings/accounts" className="underline">계좌 기초잔액</Link>으로 차액을 맞춰 주세요.
                 </p>
                 <p>
                   ② <Link href="/partners/merge" className="underline">거래처 병합 후보</Link>를 확인해 주세요.
@@ -153,6 +194,13 @@ export default async function ImportBatchPage({
     return v === undefined ? undefined : Array.isArray(v) ? v : [v]
   }
 
+  const blankRowStats = scanBlankRemitRows(wb)
+  const accounts = (await prisma.account.findMany({
+    where: { isActive: true, entity: 'KR' },
+    orderBy: { name: 'asc' },
+    select: { name: true, route: true },
+  })).filter((a) => a.route !== null).map((a) => ({ name: a.name, route: a.route as Route }))
+
   const detected = wb.sheets.map((s) => ({
     name: s.name, rows: s.rows.length, known: KNOWN.includes(s.name),
   }))
@@ -162,11 +210,19 @@ export default async function ImportBatchPage({
   const payrollYm = one('payrollYm') ?? ''
   const cnyDisplayRate = one('cnyDisplayRate') ?? ''
   const previewed = one('preview') === '1'
+  // 미리보기를 아직 안 눌렀으면 켜진 상태로 시작한다 — 대표님 확인 사항이다
+  const blankRowsAreRemittance = previewed ? one('blankRowsAreRemittance') === '1' : true
+  const remitFromRoute = (one('remitFromRoute') ?? Route.BANK_CORP) as Route
+  const usdKrwRate = one('usdKrwRate') ?? ''
+  const officeFallbackDate = one('officeFallbackDate') ?? ''
+
+  const planOpts = {
+    sheets: chosen, opsBaseYear, payrollYm, cnyDisplayRate,
+    blankRowsAreRemittance, remitFromRoute, usdKrwRate, officeFallbackDate,
+  }
 
   let plan: ImportPlan | null = null
-  if (previewed) {
-    plan = buildPlan(wb, { sheets: chosen, opsBaseYear, payrollYm, cnyDisplayRate })
-  }
+  if (previewed) plan = buildPlan(wb, planOpts)
 
   const blocked = plan
     ? plan.orders.filter((o) => o.status === 'ERROR' || o.status === 'HOLD')
@@ -191,6 +247,13 @@ export default async function ImportBatchPage({
         opsBaseYear={opsBaseYear}
         payrollYm={payrollYm}
         cnyDisplayRate={cnyDisplayRate}
+        blankRowsAreRemittance={blankRowsAreRemittance}
+        remitFromRoute={remitFromRoute}
+        usdKrwRate={usdKrwRate}
+        officeFallbackDate={officeFallbackDate}
+        blankRowCount={blankRowStats.count}
+        blankRowCny={blankRowStats.cny}
+        accounts={accounts}
       />
 
       {plan && (
@@ -276,6 +339,46 @@ export default async function ImportBatchPage({
             </div>
           )}
 
+          {plan.opsMonths.length > 0 && (
+            <div className="card">
+              <div className="card-head">
+                <h2 className="text-sm font-semibold">중국 운영비가 들어갈 달</h2>
+                <span className="text-xs text-ink-muted">Sheet1</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table>
+                  <thead>
+                    <tr>
+                      <th className="w-32">귀속월</th>
+                      <th>항목</th>
+                      <th className="w-28 text-right">합계 (CNY)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {plan.opsMonths.map((m) => (
+                      <tr key={m.ym}>
+                        <td className="text-sm font-medium">
+                          {m.label}
+                          {m.ym === '(미상)' && <span className="ml-2 pill-warn">지출일 미정</span>}
+                        </td>
+                        <td className="text-xs leading-relaxed text-ink-2">
+                          {m.items.map((i) => `${i.category} ${i.count}건 ${i.cny}`).join(' · ')}
+                        </td>
+                        <td className="text-right font-mono text-xs">{m.totalCny}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="card-foot text-xs leading-relaxed text-ink-3">
+                엑셀 Sheet1 은 제목이 <code>9月总合</code> 인데 임시공 기간은 12~1월,
+                사무실 경비 날짜는 1~2월, 거기에 8~9월 항목까지 섞여 있습니다.
+                한 달로 뭉뚱그리지 않고 각자 제 달로 보냅니다 — 그래야 월별 대시보드의 운영비가 맞습니다.
+                급여와 사회보험만 위에서 정하신 귀속월로 갑니다.
+              </div>
+            </div>
+          )}
+
           {plan.mergeCandidates.length > 0 && (
             <div className="card">
               <div className="card-head">
@@ -320,10 +423,7 @@ export default async function ImportBatchPage({
 
           <RunForm
             batchId={batch.id.toString()}
-            sheets={chosen}
-            opsBaseYear={opsBaseYear}
-            payrollYm={payrollYm}
-            cnyDisplayRate={cnyDisplayRate}
+            options={planOpts}
             blocked={blocked.length}
           />
         </>
