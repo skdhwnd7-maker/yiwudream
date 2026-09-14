@@ -1,17 +1,14 @@
 import { requireUser } from '@/lib/session-guard'
 import { prisma } from '@/lib/db'
 import { fmtCny, fmtKrw, D } from '@/lib/money'
-import { fmtDate, plain } from '@/lib/serialize'
+import { fmtDate, plain, thisMonthKST } from '@/lib/serialize'
 import { can } from '@/lib/permissions'
 import ExpenseEntry from './ExpenseEntry'
 import VoidExpenseButton from '@/components/VoidExpenseButton'
 
 export const dynamic = 'force-dynamic'
 
-function thisMonth(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-}
+
 
 export default async function OfficePage({
   searchParams,
@@ -20,7 +17,7 @@ export default async function OfficePage({
 }) {
   const user = await requireUser()
   const sp = await searchParams
-  const ym = /^\d{4}-\d{2}$/.test(sp.ym ?? '') ? sp.ym! : thisMonth()
+  const ym = /^\d{4}-\d{2}$/.test(sp.ym ?? '') ? sp.ym! : thisMonthKST()
   const [y, m] = ym.split('-').map(Number)
   const from = new Date(y, m - 1, 1)
   const to = new Date(y, m, 0, 23, 59, 59)

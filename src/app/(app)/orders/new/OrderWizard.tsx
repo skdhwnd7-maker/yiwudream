@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState, useMemo, useState } from 'react'
+import { useActionState, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Route } from '@prisma/client'
 import { SubmitButton, FormError } from '@/components/ui'
@@ -8,6 +8,7 @@ import { Field } from '@/components/Field'
 import { ROUTE_LABEL, VAT_MODE_LABEL } from '@/lib/labels'
 import { D, splitVat, krwToCny, fmtKrw, fmtCny } from '@/lib/money'
 import { createOrderWithReceipt, type ActionState } from '../actions'
+import { todayISO } from '@/lib/serialize'
 
 interface PartnerOpt {
   id: string; code: string; name: string
@@ -25,14 +26,15 @@ const ROUTES: { value: Route; label: string; icon: string; hint: string }[] = [
   { value: 'OVERSEAS', label: '해외송금', icon: '🌏', hint: '중국법인 계좌로 직접 들어온 돈' },
   { value: 'BANK_GEN', label: '일반통장', icon: '🏦', hint: '예치금 성격. 부가세와 무관' },
   { value: 'BANK_CORP', label: '법인통장', icon: '🏛', hint: '부가세 포함 입금. 계산서는 건별 선택' },
-  { value: 'SITE', label: '사이트 결제', icon: '🛒', hint: '예치금 + 수수료로 나뉜다' },
+  { value: 'SITE', label: '사이트통장', icon: '🛒', hint: '예치금 + 수수료로 나뉜다' },
 ]
 
 export default function OrderWizard({
-  partners, dealTypes, accounts, deposits, refRate, initialPartnerId,
+  partners, dealTypes, accounts, deposits, refRate, initialPartnerId, initialRoute,
 }: {
   partners: PartnerOpt[]; dealTypes: DealTypeOpt[]; accounts: AccountOpt[]
   deposits: Record<string, string>; refRate: string | null; initialPartnerId: string
+  initialRoute?: string
 }) {
   const [state, action] = useActionState<ActionState, FormData>(createOrderWithReceipt, {})
 
@@ -62,6 +64,16 @@ export default function OrderWizard({
     if (p.defaultRoute) applyRoute(p.defaultRoute, p)
     if (p.defaultFeeRate) setFeeRate(p.defaultFeeRate)
   }
+
+  // 통장별 메뉴에서 「입력」을 눌러 들어오면 그 통장을 미리 골라 둔다.
+  // 거래유형·계좌 기본값까지 따라와야 해서 applyRoute 를 그대로 쓴다.
+  const primed = useRef(false)
+  useEffect(() => {
+    if (primed.current) return
+    primed.current = true
+    if (initialRoute && initialRoute in Route) applyRoute(initialRoute as Route)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   function applyRoute(r: Route, p?: PartnerOpt) {
     setRoute(r)
@@ -184,7 +196,7 @@ export default function OrderWizard({
         <div className="grid gap-4 md:grid-cols-3">
           <Field label="일자" name="orderDate" required>
             <input id="orderDate" name="orderDate" type="date" required
-              defaultValue={new Date().toISOString().slice(0, 10)} />
+              defaultValue={todayISO()} />
           </Field>
           <Field label="거래유형" name="dealTypeId" required
             hint={dealType ? `${VAT_MODE_LABEL[dealType.vatMode as keyof typeof VAT_MODE_LABEL]} · ${dealType.accountingClass}` : undefined}>

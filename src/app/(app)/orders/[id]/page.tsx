@@ -173,7 +173,7 @@ export default async function OrderDetailPage({
                 <tr>
                   <td className="text-xs text-ink-muted">원가 대비 수익률</td>
                   <td className="n text-xs text-ink-muted">{fmtPercent(summary.costMarkupPct)}</td>
-                  <td className="pl-3 text-[11px] text-ink-muted">기존 엑셀 % 열</td>
+                  <td className="pl-3 text-[11px] text-ink-muted">원가 기준</td>
                 </tr>
               </tbody>
             </table>

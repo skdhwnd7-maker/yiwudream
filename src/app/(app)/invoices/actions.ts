@@ -21,7 +21,7 @@ const dec = (v: FormDataEntryValue | null): Prisma.Decimal | null => {
 const dateOrNull = (v: FormDataEntryValue | null): Date | null => {
   const s = String(v ?? '').trim()
   if (!s) return null
-  const d = new Date(`${s}T00:00:00`)
+  const d = new Date(`${s}T00:00:00Z`)
   return Number.isNaN(d.getTime()) ? null : d
 }
 

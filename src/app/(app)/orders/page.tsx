@@ -19,6 +19,7 @@ export default async function OrdersPage({
 }) {
   await requireUser()
   const sp = await searchParams
+  const pickedRoute = sp.route && sp.route in Route ? (sp.route as Route) : null
   const page = Math.max(1, Number(sp.page ?? 1) || 1)
 
   const where = {
@@ -38,7 +39,7 @@ export default async function OrdersPage({
     ...(sp.from || sp.to
       ? {
           orderDate: {
-            ...(sp.from ? { gte: new Date(`${sp.from}T00:00:00`) } : {}),
+            ...(sp.from ? { gte: new Date(`${sp.from}T00:00:00Z`) } : {}),
             ...(sp.to ? { lte: new Date(`${sp.to}T23:59:59`) } : {}),
           },
         }
@@ -79,13 +80,20 @@ export default async function OrdersPage({
     <div className="mx-auto max-w-[1200px] space-y-5">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="section-title text-xl">거래 목록</h1>
+          <h1 className="section-title text-xl">{pickedRoute ? ROUTE_LABEL[pickedRoute] : '거래 목록'}</h1>
           <p className="mt-1 text-sm text-ink-muted">
-            한 주문에 입금과 지출을 모두 묶어 마진을 계산합니다.
+            {pickedRoute
+              ? `${ROUTE_LABEL[pickedRoute]}으로 들어온 거래입니다. 한 건에 입금과 지출을 묶어 마진을 냅니다.`
+              : '한 주문에 입금과 지출을 모두 묶어 마진을 계산합니다.'}
           </p>
         </div>
         {partnerCount > 0 ? (
-          <Link href="/orders/new" className="btn-primary no-underline">+ 새 거래 등록</Link>
+          <Link
+            href={pickedRoute ? `/orders/new?route=${pickedRoute}` : '/orders/new'}
+            className="btn-primary no-underline"
+          >
+            + {pickedRoute ? `${ROUTE_LABEL[pickedRoute]} 입력` : '새 거래 등록'}
+          </Link>
         ) : (
           <Link href="/partners/new" className="btn-ghost no-underline">먼저 거래처를 등록하세요</Link>
         )}

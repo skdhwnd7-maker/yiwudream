@@ -36,7 +36,7 @@ export default function DealTypeFields({ d, showReason }: { d?: Values; showReas
       </Field>
 
       <Field label="매출 인식 기준" name="revenueBasis"
-        hint="순액이면 수수료만 매출로 봅니다 (사이트 결제)">
+        hint="순액이면 수수료만 매출로 봅니다 (사이트통장)">
         <select name="revenueBasis" defaultValue={d?.revenueBasis ?? RevenueBasis.GROSS}>
           {Object.values(RevenueBasis).map((v) => <option key={v} value={v}>{REVENUE_BASIS_LABEL[v]}</option>)}
         </select>

@@ -28,7 +28,7 @@ const decOrZero = (v: FormDataEntryValue | null): Prisma.Decimal => dec(v) ?? ne
 const dateOrNull = (v: FormDataEntryValue | null): Date | null => {
   const s = String(v ?? '').trim()
   if (!s) return null
-  const d = new Date(`${s}T00:00:00`)
+  const d = new Date(`${s}T00:00:00Z`)
   return Number.isNaN(d.getTime()) ? null : d
 }
 
@@ -51,7 +51,7 @@ function checkRouteFit(
   dealType: { code: string; name: string; defaultRoute: Route | null },
 ): string | null {
   const ROUTE_LABEL: Record<Route, string> = {
-    OVERSEAS: '해외송금', BANK_GEN: '일반통장', BANK_CORP: '법인통장', SITE: '사이트 결제',
+    OVERSEAS: '해외송금', BANK_GEN: '일반통장', BANK_CORP: '법인통장', SITE: '사이트통장',
     CASH: '현금', OTHER: '기타',
   }
 

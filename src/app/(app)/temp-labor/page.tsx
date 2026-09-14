@@ -23,7 +23,7 @@ export default async function TempLaborPage({
     ...(sp.from || sp.to
       ? {
           expenseDate: {
-            ...(sp.from ? { gte: new Date(`${sp.from}T00:00:00`) } : {}),
+            ...(sp.from ? { gte: new Date(`${sp.from}T00:00:00Z`) } : {}),
             ...(sp.to ? { lte: new Date(`${sp.to}T23:59:59`) } : {}),
           },
         }

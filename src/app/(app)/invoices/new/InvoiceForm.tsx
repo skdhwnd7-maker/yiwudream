@@ -7,6 +7,7 @@ import { Field } from '@/components/Field'
 import { D, fmtKrw } from '@/lib/money'
 import { VAT_MODE_LABEL, INVOICE_BASE_LABEL } from '@/lib/labels'
 import { createInvoice, type ActionState } from '../actions'
+import { todayISO } from '@/lib/serialize'
 
 interface Candidate {
   id: string; orderNo: string; orderDate: string; accountingClass: string
@@ -180,7 +181,7 @@ export default function InvoiceForm({
       <section className="card">
         <div className="card-body grid gap-4 md:grid-cols-3">
           <Field label="발행일" name="issueDate">
-            <input name="issueDate" type="date" defaultValue={new Date().toISOString().slice(0, 10)} />
+            <input name="issueDate" type="date" defaultValue={todayISO()} />
           </Field>
           <Field label="국세청 승인번호" name="ntsApprovalNo">
             <input name="ntsApprovalNo" />

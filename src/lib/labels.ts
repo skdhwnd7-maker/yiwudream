@@ -4,7 +4,7 @@ export const ROUTE_LABEL: Record<Route, string> = {
   OVERSEAS: '해외송금',
   BANK_GEN: '일반통장',
   BANK_CORP: '법인통장',
-  SITE: '사이트 결제',
+  SITE: '사이트통장',
   CASH: '현금',
   OTHER: '기타',
 }

@@ -4,6 +4,7 @@ import { useActionState, useState } from 'react'
 import { SubmitButton, FormError, FormOk } from '@/components/ui'
 import { Field } from '@/components/Field'
 import { addExpense, type ActionState } from '../orders/actions'
+import { todayISO } from '@/lib/serialize'
 
 interface Cat { id: string; code: string; name: string; defaultCurrency: string }
 interface Acc { id: string; name: string; currency: string }
@@ -43,7 +44,7 @@ export default function ExpenseEntry({
 
         <div className="grid gap-4 md:grid-cols-4">
           <Field label="일자" name="expenseDate" required>
-            <input name="expenseDate" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} />
+            <input name="expenseDate" type="date" required defaultValue={todayISO()} />
           </Field>
           <Field label="비용분류" name="categoryId" required>
             <select name="categoryId" required defaultValue={categories[0]?.id ?? ''}>

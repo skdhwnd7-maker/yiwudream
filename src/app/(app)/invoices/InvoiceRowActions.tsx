@@ -4,6 +4,7 @@ import { useActionState, useState } from 'react'
 import type { InvoiceStatus } from '@prisma/client'
 import { SubmitButton, FormError } from '@/components/ui'
 import { issueInvoice, cancelInvoice, type ActionState } from './actions'
+import { todayISO } from '@/lib/serialize'
 
 export default function InvoiceRowActions({
   invoiceId, status,
@@ -19,7 +20,7 @@ export default function InvoiceRowActions({
       <form action={issAction} className="min-w-[180px] space-y-1.5">
         <FormError message={issState.error} />
         <input type="hidden" name="invoiceId" value={invoiceId} />
-        <input name="issueDate" type="date" defaultValue={new Date().toISOString().slice(0, 10)} className="text-xs" />
+        <input name="issueDate" type="date" defaultValue={todayISO()} className="text-xs" />
         <input name="ntsApprovalNo" placeholder="승인번호 (선택)" className="text-xs" />
         <div className="flex gap-1.5">
           <SubmitButton className="btn-primary btn-sm" pendingLabel="…">발행</SubmitButton>

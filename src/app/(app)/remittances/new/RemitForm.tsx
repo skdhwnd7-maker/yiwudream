@@ -6,6 +6,7 @@ import { SubmitButton, FormError } from '@/components/ui'
 import { Field } from '@/components/Field'
 import { D, fmtKrw, fmtCny } from '@/lib/money'
 import { createRemittance, type ActionState } from '../actions'
+import { todayISO } from '@/lib/serialize'
 
 interface Row {
   orderId: string; orderNo: string; partnerId: string; partnerName: string
@@ -133,7 +134,7 @@ export default function RemitForm({
         <div className="card-head"><h2 className="text-sm font-semibold">송금 정보</h2></div>
         <div className="card-body grid gap-4 md:grid-cols-3">
           <Field label="송금일" name="remitDate" required>
-            <input name="remitDate" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} />
+            <input name="remitDate" type="date" required defaultValue={todayISO()} />
           </Field>
           <Field label="출금 계좌 (한국)" name="fromAccountId" required>
             <select name="fromAccountId" required defaultValue={krAccounts[0]?.id ?? ''}>

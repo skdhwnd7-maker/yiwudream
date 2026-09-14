@@ -1,15 +1,12 @@
 import { requirePermission } from '@/lib/session-guard'
 import { prisma } from '@/lib/db'
 import { fmtCny, fmtKrw, D } from '@/lib/money'
-import { plain } from '@/lib/serialize'
+import { plain, thisMonthKST } from '@/lib/serialize'
 import PayrollBoard from './PayrollBoard'
 
 export const dynamic = 'force-dynamic'
 
-function thisMonth(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-}
+
 
 export default async function PayrollPage({
   searchParams,
@@ -18,7 +15,7 @@ export default async function PayrollPage({
 }) {
   await requirePermission('payroll.view')
   const sp = await searchParams
-  const ym = /^\d{4}-\d{2}$/.test(sp.ym ?? '') ? sp.ym! : thisMonth()
+  const ym = /^\d{4}-\d{2}$/.test(sp.ym ?? '') ? sp.ym! : thisMonthKST()
 
   const [employees, payrolls, months] = await Promise.all([
     prisma.employee.findMany({ orderBy: [{ isActive: 'desc' }, { empCode: 'asc' }] }),
@@ -46,18 +43,6 @@ export default async function PayrollPage({
           급여를 확정하면 지출 전표가 자동으로 만들어져 중국 운영비에 집계됩니다.
         </p>
       </header>
-
-      <div className="card border-gold bg-gold-soft">
-        <div className="card-body text-sm leading-relaxed text-ink-2">
-          <p className="font-medium text-gold">집계는 실지급액 기준입니다</p>
-          <p className="mt-1.5">
-            기존 엑셀은 합계를 <strong>기본급(111,450)</strong>으로 내고 있었는데 실지급 합계는
-            116,300이었습니다. 4,850 CNY 차이입니다. 이 프로그램은 실제로 나간 돈인
-            <strong> 실지급액</strong>으로 집계합니다. 그리고 <strong>귀속월이 필수</strong>라
-            1월과 9월 데이터가 섞이지 않습니다.
-          </p>
-        </div>
-      </div>
 
       <PayrollBoard
         yearMonth={ym}

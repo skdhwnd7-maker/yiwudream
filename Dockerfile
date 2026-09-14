@@ -9,9 +9,11 @@ WORKDIR /app
 
 # prisma 는 openssl, 기동 대기는 pg_isready 가 필요하다
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssl postgresql-client \
+    && apt-get install -y --no-install-recommends openssl postgresql-client tzdata \
     && rm -rf /var/lib/apt/lists/*
 
+# 서버가 어느 나라에 있든 화면의 날짜·시각은 한국 시간으로 나와야 한다.
+ENV TZ=Asia/Seoul
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # 의존성 먼저 — 소스가 바뀌어도 이 층은 다시 받지 않는다

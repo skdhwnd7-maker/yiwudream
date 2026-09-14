@@ -36,18 +36,6 @@ export default async function TransfersPage() {
         </p>
       </header>
 
-      <div className="card border-gold bg-gold-soft">
-        <div className="card-body text-sm leading-relaxed text-ink-2">
-          <p className="font-medium text-gold">고객 거래가 아닙니다</p>
-          <p className="mt-1.5">
-            기존 엑셀에서는 이 송금이 해외송금 시트에 <span className="font-mono">이우드림</span>이라는
-            거래처명으로 섞여 있었고, 지출이 없어 <strong>전액이 매출·마진으로 잡히고 있었습니다.</strong>
-            (4개월 CNY 7,516,792 — 해외송금 도착액의 33.7%)
-            여기 등록한 건은 매출·마진·거래처 순위 어디에도 들어가지 않고, 계좌 잔액만 움직입니다.
-          </p>
-        </div>
-      </div>
-
       {can(user.role, 'remittance.execute') && (
         <TransferForm
           krAccounts={plain(accounts.filter((a) => a.entity === 'KR'))}

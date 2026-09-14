@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
 export default async function NewOrderPage({
   searchParams,
 }: {
-  searchParams: Promise<{ partner?: string }>
+  searchParams: Promise<{ partner?: string; route?: string }>
 }) {
   await requirePermission('transaction.write')
   const sp = await searchParams
@@ -51,6 +51,7 @@ export default async function NewOrderPage({
         deposits={deposits}
         refRate={fxRef ? fxRef.rate.toString() : null}
         initialPartnerId={sp.partner ?? ''}
+        initialRoute={sp.route ?? ''}
       />
     </div>
   )

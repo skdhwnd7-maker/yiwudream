@@ -113,7 +113,7 @@ export interface DashboardData {
 }
 
 const ROUTE_LABELS: Record<string, string> = {
-  OVERSEAS: '해외송금', BANK_GEN: '일반통장', BANK_CORP: '법인통장', SITE: '사이트 결제',
+  OVERSEAS: '해외송금', BANK_GEN: '일반통장', BANK_CORP: '법인통장', SITE: '사이트통장',
 }
 
 /**

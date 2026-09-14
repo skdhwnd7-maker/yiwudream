@@ -35,10 +35,27 @@ export function fmtDate(v: Date | string | null | undefined): string {
   if (!v) return '—'
   const d = typeof v === 'string' ? new Date(v) : v
   if (Number.isNaN(d.getTime())) return '—'
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
+  // 거래일·입금일 같은 「날짜만」 칸은 UTC 자정으로 담아 둔다.
+  // 서버가 어느 나라에 있든 같은 날짜가 나오도록 꺼낼 때도 UTC 로 읽는다.
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
   return `${y}-${m}-${day}`
+}
+
+const SEOUL = 'Asia/Seoul'
+
+/** 오늘 날짜 (한국 기준). 입력 폼의 기본값에 쓴다. */
+export function todayISO(): string {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SEOUL, year: 'numeric', month: '2-digit', day: '2-digit',
+  })
+  return p.format(new Date())
+}
+
+/** 이번 달 (한국 기준, `2026-09`). 조회 월 기본값에 쓴다. */
+export function thisMonthKST(): string {
+  return todayISO().slice(0, 7)
 }
 
 /** `2026-05-04 14:22` 형태. 이력 화면에 쓴다. */
@@ -46,8 +63,13 @@ export function fmtDateTime(v: Date | string | null | undefined): string {
   if (!v) return '—'
   const d = typeof v === 'string' ? new Date(v) : v
   if (Number.isNaN(d.getTime())) return '—'
-  const hh = String(d.getHours()).padStart(2, '0')
-  const mm = String(d.getMinutes()).padStart(2, '0')
-  const ss = String(d.getSeconds()).padStart(2, '0')
-  return `${fmtDate(d)} ${hh}:${mm}:${ss}`
+  // 기록된 「시각」은 언제나 한국 시간으로 보여 준다.
+  // 서버는 해외(Railway 미국 서부)에 있어서 그대로 두면 9시간 전으로 나온다.
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SEOUL, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
+  const f = Object.fromEntries(p.formatToParts(d).map((x) => [x.type, x.value]))
+  return `${f.year}-${f.month}-${f.day} ${f.hour}:${f.minute}:${f.second}`
 }

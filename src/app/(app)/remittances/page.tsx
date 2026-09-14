@@ -80,7 +80,7 @@ export default async function RemittancesPage({
               {pending.length === 0 && (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-sm text-ink-muted">
-                    보내야 할 돈이 없습니다. 사이트 결제로 상품구매 예치금이 들어오면 여기에 나타납니다.
+                    보내야 할 돈이 없습니다. 사이트통장으로 상품구매 예치금이 들어오면 여기에 나타납니다.
                   </td>
                 </tr>
               )}

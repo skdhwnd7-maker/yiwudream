@@ -4,6 +4,7 @@ import { useActionState, useState } from 'react'
 import { SubmitButton, FormError, FormOk } from '@/components/ui'
 import { Field } from '@/components/Field'
 import { saveVatPeriod, fileVatPeriod, payVatPeriod, reopenVatPeriod, type ActionState } from './actions'
+import { todayISO } from '@/lib/serialize'
 
 export function NewPeriodForm() {
   const [state, action] = useActionState<ActionState, FormData>(saveVatPeriod, {})
@@ -74,7 +75,7 @@ export function PeriodActions({
         <FormError message={payState.error} />
         <input type="hidden" name="id" value={id} />
         <input name="paidAt" type="date" required className="text-xs"
-          defaultValue={new Date().toISOString().slice(0, 10)} />
+          defaultValue={todayISO()} />
         <input name="paidAmount" inputMode="decimal" required className="num text-xs"
           defaultValue={netPayable} placeholder="납부액" />
         <select name="accountId" className="text-xs">

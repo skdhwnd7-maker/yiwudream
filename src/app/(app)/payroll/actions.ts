@@ -17,7 +17,7 @@ const dec = (v: FormDataEntryValue | null): Prisma.Decimal => {
 const dateOrNull = (v: FormDataEntryValue | null): Date | null => {
   const s = String(v ?? '').trim()
   if (!s) return null
-  const d = new Date(`${s}T00:00:00`)
+  const d = new Date(`${s}T00:00:00Z`)
   return Number.isNaN(d.getTime()) ? null : d
 }
 
@@ -131,7 +131,7 @@ export async function savePayroll(_prev: ActionState, formData: FormData): Promi
   try {
     await prisma.$transaction(async (tx) => {
       const ctx = await auditContext(user, reason)
-      const payDate = paidAt ?? new Date(`${yearMonth}-01T00:00:00`)
+      const payDate = paidAt ?? new Date(`${yearMonth}-01T00:00:00Z`)
 
       // 급여를 확정하면 지출 전표가 따라 생긴다.
       // 지출 원장을 하나로 두어야 자금현황·대시보드 집계가 어긋나지 않는다.

@@ -103,17 +103,6 @@ export default async function PartnersPage({
         </table>
       </div>
 
-      {internal.length > 0 && (
-        <div className="card border-gold bg-gold-soft">
-          <div className="card-body">
-            <p className="text-sm font-medium text-gold">내부 계정</p>
-            <p className="mt-1 text-sm text-ink-2">
-              {internal.map((i) => `${i.name}(${i.code})`).join(', ')} — 자사 자금이동용입니다.
-              매출·마진·거래처 순위 집계에서 제외됩니다.
-            </p>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
