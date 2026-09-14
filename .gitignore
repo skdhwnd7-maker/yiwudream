@@ -10,3 +10,4 @@ next-env.d.ts
 /shots/
 # 올린 엑셀 원본 — 서버에만 둔다
 .uploads/
+.env.docker

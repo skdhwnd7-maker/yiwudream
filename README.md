@@ -11,7 +11,24 @@
 
 ---
 
-## 빠른 시작
+## 내 PC에서 바로 실행하기 (개발 지식 없이)
+
+Docker Desktop 만 설치하면 **`windows/시작.bat` 을 두 번 누르는 것**으로 끝납니다.
+PostgreSQL 도 같이 들어 있어 따로 설치하실 필요가 없습니다.
+
+자세한 방법: **[windows/README.md](windows/README.md)**
+
+```
+주소     http://localhost:3000
+아이디   admin      (직원 화면은 staff)
+비밀번호 yiwu-test-2026!
+```
+
+이 PC 에서만 열리고(`127.0.0.1`), 들어 있는 자료는 전부 시연용 가짜 거래입니다.
+
+---
+
+## 빠른 시작 (개발자용)
 
 ```bash
 # 1. PostgreSQL 준비 (16 이상)

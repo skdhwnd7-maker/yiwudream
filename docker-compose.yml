@@ -1,0 +1,52 @@
+# 이우드림무역 자금관리 — 대표님 PC에서 실행
+#
+# 도커 데스크톱만 깔려 있으면 「시작.bat」 을 두 번 눌러 실행됩니다.
+# 127.0.0.1 에만 열려 있어 같은 네트워크의 다른 사람은 접근할 수 없습니다.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: yiwudream-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: yiwudream
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: yiwudream
+      # 한글 정렬을 위해
+      LANG: ko_KR.utf8
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    # 밖으로 열지 않는다. 앱 컨테이너에서만 닿는다.
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yiwudream -d yiwudream"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yiwudream-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://yiwudream:${DB_PASSWORD}@db:5432/yiwudream?schema=public
+      AUTH_SECRET: ${AUTH_SECRET}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+      # 이 PC 안에서만 쓰므로 http 로 둔다. true 로 하면 https 아니면 로그인이 안 된다.
+      COOKIE_SECURE: "false"
+      UPLOAD_DIR: /app/.uploads
+    volumes:
+      - uploads:/app/.uploads
+    # ⭐ 127.0.0.1 에만 연다. 같은 사무실 다른 PC 에서도 안 보인다.
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  db-data:
+  uploads:

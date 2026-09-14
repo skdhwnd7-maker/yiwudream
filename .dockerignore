@@ -1,0 +1,9 @@
+node_modules
+.next
+.git
+.uploads
+.env
+.env.docker
+*.log
+windows
+docs
