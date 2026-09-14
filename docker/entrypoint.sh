@@ -23,7 +23,7 @@ fi
 # 1) DB가 받을 준비가 될 때까지 기다린다
 #    pg_isready 는 ?schema=public 같은 꼬리표를 못 읽는다. 떼고 넘긴다.
 PG_URL="${DATABASE_URL%%\?*}"
-printf "  [1/5] 데이터베이스 연결 확인"
+printf "  [1/6] 데이터베이스 연결 확인"
 i=0
 while [ "$i" -lt 90 ]; do
   if pg_isready -d "$PG_URL" >/dev/null 2>&1; then
@@ -42,15 +42,20 @@ if [ "$i" -ge 90 ]; then
 fi
 
 # 2) 표를 만든다 (이미 있으면 그대로 둔다)
-echo "  [2/5] 표 만들기"
+echo "  [2/6] 표 만들기"
 npx prisma db push --skip-generate --accept-data-loss >/dev/null 2>&1
 
 # 3) 보호장치(원장 불변·예치금 마이너스 금지 등)
-echo "  [3/5] 보호장치 적용"
+echo "  [3/6] 보호장치 적용"
 npx tsx scripts/apply-sql.ts >/dev/null 2>&1
 
-# 4) 로그인 보안키 — 한 번 만들어 DB에 보관하고 계속 같은 것을 쓴다
-echo "  [4/5] 로그인 보안키 확인"
+# 4) 자료 비우기 — RESET_DATA 를 넣었을 때만, 그 값으로는 딱 한 번만 돈다
+#    보안키보다 먼저 해야 한다. 비우면 보안키도 같이 지워지기 때문이다.
+echo "  [4/6] 자료 초기화 확인"
+npx tsx scripts/reset-data.ts
+
+# 5) 로그인 보안키 — 한 번 만들어 DB에 보관하고 계속 같은 것을 쓴다
+echo "  [5/6] 로그인 보안키 확인"
 AUTH_SECRET="$(npx tsx scripts/ensure-auth-secret.ts)"
 export AUTH_SECRET
 if [ -z "$AUTH_SECRET" ]; then
@@ -58,13 +63,13 @@ if [ -z "$AUTH_SECRET" ]; then
   exit 1
 fi
 
-# 5) 기준정보 + 시연 자료 — 이미 있으면 건너뛴다
+# 6) 기준정보 + 시연 자료 — 이미 있으면 건너뛴다
 #    실제 자료로 쓰기 시작하면 SEED_DEMO=0 으로 꺼 둔다.
 if [ "${SEED_DEMO:-1}" = "0" ]; then
-  echo "  [5/5] 기준정보 준비 (시연 자료는 넣지 않습니다)"
+  echo "  [6/6] 기준정보 준비 (시연 자료는 넣지 않습니다)"
   npx tsx prisma/seed.ts
 else
-  echo "  [5/5] 시연 자료 준비"
+  echo "  [6/6] 시연 자료 준비"
   npx tsx scripts/demo-setup.ts
 fi
 
