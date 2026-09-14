@@ -68,16 +68,22 @@ export interface FundsSnapshot {
  * 최근 입금 전표의 실제 적용환율을 쓴다. 없으면 참고환율, 그것도 없으면 null.
  * 임의의 값을 지어내지 않는다 — 환산 불가는 화면에서 그대로 알린다.
  */
-export async function latestFxRate(): Promise<Prisma.Decimal | null> {
+export async function latestFxRate(asOf?: Date): Promise<Prisma.Decimal | null> {
   const recent = await prisma.receipt.findFirst({
-    where: { fxRate: { not: null }, isVoid: false },
+    where: {
+      fxRate: { not: null }, isVoid: false,
+      ...(asOf ? { receiptDate: { lte: asOf } } : {}),
+    },
     orderBy: [{ receiptDate: 'desc' }, { id: 'desc' }],
     select: { fxRate: true },
   })
   if (recent?.fxRate) return recent.fxRate
 
   const ref = await prisma.fxRateRef.findFirst({
-    where: { baseCurrency: 'CNY', quoteCurrency: 'KRW' },
+    where: {
+      baseCurrency: 'CNY', quoteCurrency: 'KRW',
+      ...(asOf ? { rateDate: { lte: asOf } } : {}),
+    },
     orderBy: { rateDate: 'desc' },
   })
   return ref?.rate ?? null
@@ -153,7 +159,9 @@ export async function accountBalances(asOf?: Date): Promise<AccountBalance[]> {
 }
 
 export async function fundsSnapshot(asOf?: Date): Promise<FundsSnapshot> {
-  const [accounts, fxRate] = await Promise.all([accountBalances(asOf), latestFxRate()])
+  // asOf 를 주면 그 시점의 장부를 본다 — 환율도 그때까지 알려진 것을 쓴다.
+  // 오늘 환율로 과거 잔액을 환산하면 지난 달 숫자가 오늘마다 바뀐다.
+  const [accounts, fxRate] = await Promise.all([accountBalances(asOf), latestFxRate(asOf)])
 
   let totalBalanceKrw = zero()
   for (const a of accounts) {
@@ -175,6 +183,9 @@ export async function fundsSnapshot(asOf?: Date): Promise<FundsSnapshot> {
       },
       _sum: { amountKrw: true },
     }),
+    // ⚠ 지급여부는 지금 상태다. 나중에 지급한 건도 과거 시점 조회에서는
+    //    「미지급」 으로 나오지 않는다 — 상태 변경 이력을 따로 남기지 않기 때문이다.
+    //    지금 미지급인 것만 센다.
     prisma.expense.aggregate({
       where: { paymentStatus: 'PLANNED', isVoid: false, ...(asOf ? { expenseDate: { lte: asOf } } : {}) },
       _sum: { amountKrw: true },
@@ -213,7 +224,7 @@ export async function fundsSnapshot(asOf?: Date): Promise<FundsSnapshot> {
   const vatPayable = D(vatAgg._sum.amountKrw ?? 0)
   const unpaidExpenses = D(unpaidAgg._sum.amountKrw ?? 0)
 
-  const receivables = await listReceivables()
+  const receivables = await listReceivables(asOf)
   const receivableTotal = receivables.reduce((s, r) => s.plus(r.amountKrw), zero())
 
   return {
@@ -230,18 +241,24 @@ export async function fundsSnapshot(asOf?: Date): Promise<FundsSnapshot> {
   }
 }
 
-/** 미수금 — 진행중 주문에서 회사부담 비용이 매출인식액을 넘은 금액 */
-export async function listReceivables(): Promise<Receivable[]> {
+/**
+ * 미수금 — 진행중 주문에서 회사부담 비용이 매출인식액을 넘은 금액.
+ * asOf 를 주면 그 시점 기준으로 본다 (그 뒤에 들어온 입금은 세지 않는다).
+ */
+export async function listReceivables(asOf?: Date): Promise<Receivable[]> {
   const { summarizeOrders } = await import('./order-calc')
   const orders = await prisma.order.findMany({
-    where: { status: 'OPEN', isVoid: false },
+    where: {
+      status: 'OPEN', isVoid: false,
+      ...(asOf ? { orderDate: { lte: asOf } } : {}),
+    },
     include: { partner: { select: { id: true, name: true, defaultMarkupRate: true } } },
     orderBy: { orderDate: 'asc' },
   })
 
   const [fx, summaries] = await Promise.all([
-    latestFxRate(),
-    summarizeOrders(orders.map((o) => o.id)),
+    latestFxRate(asOf),
+    summarizeOrders(orders.map((o) => o.id), prisma, asOf),
   ])
   const out: Receivable[] = []
   const now = Date.now()

@@ -740,6 +740,95 @@ async function main() {
     await prisma.order.delete({ where: { id: guardOrder.id } })
   }
 
+  // ════════════════════════════════════════════════════════════
+  console.log('\n━━ 12. 월별 손익은 과거가 바뀌지 않는다 ━━')
+  {
+    const { dashboardData } = await import('../src/lib/dashboard')
+    const dtCorp = await prisma.dealType.findFirstOrThrow({ where: { code: 'CORP_FULL' } })
+    const accCorp = await prisma.account.findFirstOrThrow({ where: { route: Route.BANK_CORP } })
+    const p2 = await prisma.partner.create({
+      data: { code: `PD${stamp}`, name: `기간검증${stamp}`, nameNormalized: `pd${stamp}`, createdBy: admin.id },
+    })
+    const order = await prisma.order.create({
+      data: {
+        orderNo: `PD${stamp}`, partnerId: p2.id, route: Route.BANK_CORP, dealTypeId: dtCorp.id,
+        accountingClass: '상품매출', entity: Entity.KR, settlementCurrency: Currency.KRW,
+        orderDate: new Date(2019, 4, 10), invoiceStatus: InvoiceStatus.NONE, createdBy: admin.id,
+      },
+    })
+    const addReceipt = async (date: Date, amt: string, no: string) => {
+      const r = await prisma.receipt.create({
+        data: {
+          receiptNo: `PDR${stamp}${no}`, orderId: order.id, partnerId: p2.id, accountId: accCorp.id,
+          route: Route.BANK_CORP, entity: Entity.KR, receiptDate: date,
+          currency: Currency.KRW, amount: D(amt), amountKrw: D(amt), createdBy: admin.id,
+        },
+      })
+      await prisma.receiptSplit.create({
+        data: { receiptId: r.id, splitKind: SplitKind.SALES, amount: D(amt), amountKrw: D(amt) },
+      })
+    }
+    const addExpense = async (date: Date, amt: string, no: string) => {
+      const cat = await prisma.expenseCategory.findFirstOrThrow({ where: { code: 'GOODS' } })
+      const e = await prisma.expense.create({
+        data: {
+          expenseNo: `PDE${stamp}${no}`, entity: Entity.KR, expenseDate: date,
+          categoryId: cat.id, currency: Currency.KRW, amount: D(amt), amountKrw: D(amt),
+          paymentStatus: PaymentStatus.PAID, paidAt: date, createdBy: admin.id,
+        },
+      })
+      await prisma.expenseAllocation.create({
+        data: { expenseId: e.id, orderId: order.id, allocAmount: D(amt), allocKrw: D(amt) },
+      })
+    }
+
+    await addReceipt(new Date(2019, 4, 10), '1000000', 'a')
+    await addExpense(new Date(2019, 4, 12), '700000', 'a')
+    const may1 = await dashboardData('2019-05')
+    check('5월 매출', may1.totalRevenue.toString(), '1000000')
+    check('5월 원가', may1.totalCost.toString(), '700000')
+    check('5월 영업마진', may1.operatingMargin.toString(), '300000')
+
+    // 같은 주문에 6월 입금·지출을 붙인다
+    await addReceipt(new Date(2019, 5, 10), '500000', 'b')
+    await addExpense(new Date(2019, 5, 15), '200000', 'b')
+
+    const may2 = await dashboardData('2019-05')
+    check('6월 거래가 생겨도 5월 매출은 그대로', may2.totalRevenue.toString(), '1000000')
+    check('6월 거래가 생겨도 5월 원가는 그대로', may2.totalCost.toString(), '700000')
+    check('6월 거래가 생겨도 5월 마진은 그대로', may2.operatingMargin.toString(), '300000')
+
+    const jun = await dashboardData('2019-06')
+    check('6월 매출은 6월에 잡힌다', jun.totalRevenue.toString(), '500000')
+    check('6월 원가는 6월에 잡힌다', jun.totalCost.toString(), '200000')
+    check('6월 마진', jun.operatingMargin.toString(), '300000')
+
+    // 주문 기준 분석은 주문이 시작된 달에서 전 생애를 본다
+    check('주문 기준 매출 (5월 시작 주문의 전 생애)',
+      may2.orderStarted.revenue.toString(), '1500000')
+    check('주문 기준 원가', may2.orderStarted.cost.toString(), '900000')
+    check('주문 기준 마진', may2.orderStarted.margin.toString(), '600000')
+    check('6월에는 시작된 주문이 없다', jun.orderStarted.orderCount, 0)
+
+    // 자금현황도 그 시점만 본다
+    const { fundsSnapshot } = await import('../src/lib/funds')
+    const mayEnd = await fundsSnapshot(new Date(2019, 4, 31, 23, 59, 59))
+    const junEnd = await fundsSnapshot(new Date(2019, 5, 30, 23, 59, 59))
+    const corpMay = mayEnd.accounts.find((a) => a.id === accCorp.id.toString())!.balance
+    const corpJun = junEnd.accounts.find((a) => a.id === accCorp.id.toString())!.balance
+    check('5월 말 잔액에는 6월 입금이 없다', corpJun.minus(corpMay).toString(), '500000')
+
+    // 정리
+    const allocs = await prisma.expenseAllocation.findMany({ where: { orderId: order.id }, select: { expenseId: true } })
+    await prisma.expenseAllocation.deleteMany({ where: { orderId: order.id } })
+    await prisma.expense.deleteMany({ where: { id: { in: allocs.map((a) => a.expenseId) } } })
+    const rs2 = await prisma.receipt.findMany({ where: { orderId: order.id }, select: { id: true } })
+    await prisma.receiptSplit.deleteMany({ where: { receiptId: { in: rs2.map((r) => r.id) } } })
+    await prisma.receipt.deleteMany({ where: { orderId: order.id } })
+    await prisma.order.delete({ where: { id: order.id } })
+    await prisma.partner.delete({ where: { id: p2.id } })
+  }
+
   // ── 정리
   const orders = await prisma.order.findMany({ where: { partnerId: partner.id }, select: { id: true } })
   const orderIds = orders.map((o) => o.id)

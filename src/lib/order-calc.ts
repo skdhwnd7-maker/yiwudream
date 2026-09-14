@@ -211,6 +211,11 @@ export async function summarizeOrder(orderId: bigint, tx: Tx = prisma): Promise<
  */
 export async function summarizeOrders(
   orderIds: bigint[], tx: Tx = prisma,
+  /**
+   * 이 날짜까지의 전표만 센다. 「그때 시점의 장부」 를 볼 때 쓴다.
+   * 안 주면 지금까지 전부.
+   */
+  asOf?: Date,
 ): Promise<Map<string, OrderSummary>> {
   const out = new Map<string, OrderSummary>()
   if (orderIds.length === 0) return out
@@ -221,11 +226,17 @@ export async function summarizeOrders(
       select: { id: true, settlementCurrency: true, dealType: { select: { revenueBasis: true } } },
     }),
     tx.receipt.findMany({
-      where: { orderId: { in: orderIds }, isVoid: false },
+      where: {
+        orderId: { in: orderIds }, isVoid: false,
+        ...(asOf ? { receiptDate: { lte: asOf } } : {}),
+      },
       select: { orderId: true, amountKrw: true, amountCny: true, splits: true },
     }),
     tx.expenseAllocation.findMany({
-      where: { orderId: { in: orderIds }, expense: { isVoid: false } },
+      where: {
+        orderId: { in: orderIds },
+        expense: { isVoid: false, ...(asOf ? { expenseDate: { lte: asOf } } : {}) },
+      },
       select: {
         orderId: true, allocKrw: true, allocCny: true,
         expense: { select: { category: { select: { code: true } } } },
@@ -234,7 +245,10 @@ export async function summarizeOrders(
     tx.remittanceAllocation.findMany({
       where: {
         orderId: { in: orderIds },
-        remittance: { isVoid: false, status: { in: ['SENT', 'ARRIVED'] } },
+        remittance: {
+          isVoid: false, status: { in: ['SENT', 'ARRIVED'] },
+          ...(asOf ? { remitDate: { lte: asOf } } : {}),
+        },
       },
       select: { orderId: true, allocKrw: true, allocCny: true },
     }),

@@ -165,17 +165,24 @@ export interface UnbilledVatRow {
   partnerId: string
   partnerName: string
   orderDate: Date
+  /** 부가세를 실제로 받은 마지막 입금일 — 월별 집계는 이 날짜를 쓴다 */
+  lastReceiptDate: Date
   supplyKrw: Prisma.Decimal
   vatKrw: Prisma.Decimal
   daysOld: number
 }
 
-export async function listUnbilledVat(): Promise<UnbilledVatRow[]> {
+/**
+ * 세금계산서 없이 부가세만 받은 건.
+ * asOf 를 주면 그 날짜까지 받은 것만 센다 — 월별 화면이 과거 달을 바꾸지 않으려면 필요하다.
+ */
+export async function listUnbilledVat(asOf?: Date): Promise<UnbilledVatRow[]> {
   const rows = await prisma.receiptSplit.findMany({
     where: {
       splitKind: 'VAT',
       receipt: {
         isVoid: false,
+        ...(asOf ? { receiptDate: { lte: asOf } } : {}),
         order: { isVoid: false, invoiceStatus: 'NONE' },
       },
     },
@@ -198,6 +205,7 @@ export async function listUnbilledVat(): Promise<UnbilledVatRow[]> {
     const cur = byOrder.get(key)
     if (cur) {
       cur.vatKrw = cur.vatKrw.plus(r.amountKrw)
+      if (r.receipt.receiptDate > cur.lastReceiptDate) cur.lastReceiptDate = r.receipt.receiptDate
     } else {
       byOrder.set(key, {
         orderId: key,
@@ -205,6 +213,7 @@ export async function listUnbilledVat(): Promise<UnbilledVatRow[]> {
         partnerId: o.partner.id.toString(),
         partnerName: o.partner.name,
         orderDate: o.orderDate,
+        lastReceiptDate: r.receipt.receiptDate,
         supplyKrw: D(0),
         vatKrw: D(r.amountKrw),
         daysOld: Math.floor((now - o.orderDate.getTime()) / 86_400_000),

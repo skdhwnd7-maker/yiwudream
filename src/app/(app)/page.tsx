@@ -67,9 +67,9 @@ export default async function DashboardPage({
 
       {/* 대표님이 가장 먼저 볼 네 숫자 */}
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Hero label="총 거래액" value={fmtKrw(d.totalRevenue)} sub="매출로 인식된 금액" />
+        <Hero label="총 거래액" value={fmtKrw(d.totalRevenue)} sub="이 달에 들어온 입금 기준" />
         <Hero label="최종 영업마진" value={fmtKrw(d.operatingMargin)}
-          tone={d.operatingMargin.lt(0) ? 'clay' : 'jade'} sub="주문마진 − 중국 운영비" />
+          tone={d.operatingMargin.lt(0) ? 'clay' : 'jade'} sub="매출 − 주문원가 − 운영비" />
         <Hero label="마진율" value={fmtPercent(d.operatingMarginRate)} sub="매출 대비" />
         <Hero label="실제 사용가능 자금" value={fmtKrw(d.available)}
           tone={d.available.lt(0) ? 'clay' : 'jade'} sub="월말 기준" href="/funds" />
@@ -109,33 +109,44 @@ export default async function DashboardPage({
               points={d.trend.map((t) => ({
                 label: t.ym.slice(2), value: Number(t.revenue), display: fmtKrw(t.revenue),
               }))} />
-            <MiniBars title="주문 마진" color={VIZ_MARGIN}
+            <MiniBars title="영업마진" color={VIZ_MARGIN}
               points={d.trend.map((t) => ({
                 label: t.ym.slice(2), value: Number(t.margin), display: fmtKrw(t.margin),
               }))} />
-            <p className="hint">막대에 마우스를 올리면 그 달 값이 위에 표시됩니다. 두 지표는 크기가 달라 각각의 축으로 그렸습니다.</p>
+            <p className="hint">
+              막대에 마우스를 올리면 그 달 값이 위에 표시됩니다. 두 지표는 크기가 달라 각각의 축으로 그렸습니다.
+              전표에 적힌 날짜 기준이라 <strong>지난 달 숫자는 나중에 바뀌지 않습니다.</strong>
+            </p>
           </div>
         </div>
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
-        {/* 수익 구성 */}
+        {/* 수익 구성 — 전부 이 달 전표 기준 */}
         <div className="card">
-          <div className="card-head"><h2 className="text-sm font-semibold">수익 구성</h2></div>
+          <div className="card-head">
+            <h2 className="text-sm font-semibold">이 달 손익</h2>
+            <span className="text-xs text-ink-muted">전표 날짜 기준</span>
+          </div>
           <div className="table-wrap border-0">
             <table>
               <tbody>
-                <Row label="구매대행 수수료" value={fmtKrw(d.agencyFee)} />
-                <Row label="대행통관 수익" value={fmtKrw(d.customsRevenue)} />
-                <Row label="총 상품구매액" value={fmtKrw(d.goodsPurchase)} muted />
+                <Row label="상품·용역 매출" value={fmtKrw(d.salesRevenue)} />
+                <Row label="구매대행 수수료" value={fmtKrw(d.feeRevenue)} />
+                <Row label="주문 원가" value={`− ${fmtKrw(d.totalCost)}`} muted />
+                <Row label="중국 운영비" value={`− ${fmtKrw(d.opTotal)}`} muted />
                 <tr className="border-t border-line">
-                  <td className="pt-2 text-sm">주문 마진 합계</td>
-                  <td className={`n pt-2 text-sm font-medium ${d.orderMargin.lt(0) ? 'text-clay' : 'text-jade'}`}>
-                    {fmtKrw(d.orderMargin)}
+                  <td className="pt-2 text-sm">영업마진</td>
+                  <td className={`n pt-2 text-sm font-medium ${d.operatingMargin.lt(0) ? 'text-clay' : 'text-jade'}`}>
+                    {fmtKrw(d.operatingMargin)}
                   </td>
                 </tr>
               </tbody>
             </table>
+          </div>
+          <div className="card-foot text-xs leading-relaxed text-ink-3">
+            매출은 입금일, 비용은 지출일 기준입니다. 받은 부가세 {fmtKrw(d.vatCollected)}원은
+            매출이 아니라 국세청에 낼 돈이라 여기 넣지 않았습니다.
           </div>
         </div>
 
@@ -166,6 +177,32 @@ export default async function DashboardPage({
         </div>
       </section>
 
+      {/* 주문 기준 — 기간 손익과 뜻이 다르다 */}
+      <section className="card">
+        <div className="card-head">
+          <h2 className="text-sm font-semibold">이 달에 시작한 주문의 수익성</h2>
+          <span className="text-xs text-ink-muted">{d.orderStarted.orderCount}건</span>
+        </div>
+        <div className="card-body grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Mini label="매출" value={fmtKrw(d.orderStarted.revenue)} tone="slate" note="그 주문에 들어온 돈 전부" />
+          <Mini label="원가" value={fmtKrw(d.orderStarted.cost)} tone="slate" note="그 주문에 나간 돈 전부" />
+          <Mini label="마진" value={fmtKrw(d.orderStarted.margin)}
+            tone={d.orderStarted.margin.lt(0) ? 'clay' : 'jade'} />
+          <Mini label="마진율" value={fmtPercent(d.orderStarted.marginRate)} tone="slate" note="매출 대비" />
+        </div>
+        <div className="card-foot text-xs leading-relaxed text-ink-3">
+          위 「이 달 손익」과 뜻이 다릅니다. 여기는 <strong>이 달에 받은 일이 남는 장사였나</strong>를 봅니다 —
+          그 주문에 나중에 입금이나 지출이 붙으면 이 숫자는 바뀝니다.
+          월별 손익은 전표 날짜로 고정되어 바뀌지 않습니다.
+          {d.orderStarted.unbilledOrderCount > 0 && (
+            <>
+              {' '}이 달 주문 {d.orderStarted.unbilledOrderCount}건은 아직 입금이 없어
+              비용 {fmtKrw(d.orderStarted.unbilledOrderCost)}원만 나갔고, 마진 집계에서는 뺐습니다.
+            </>
+          )}
+        </div>
+      </section>
+
       {/* 남의 돈 / 받을 돈 */}
       <section className="card">
         <div className="card-head">
@@ -180,12 +217,6 @@ export default async function DashboardPage({
           <Mini label="받을 돈 (미수금)" value={fmtKrw(d.receivableTotal)} tone="clay" note="통장에 없는 자산"
             href={d.receivableTotal.gt(0) ? '/funds' : undefined} />
         </div>
-        {d.unbilledOrderCount > 0 && (
-          <p className="card-foot text-xs text-ink-3">
-            이번 달 주문 {d.unbilledOrderCount}건은 아직 입금이 없어 비용 {fmtKrw(d.unbilledOrderCost)}원만
-            나갔습니다. 받을 금액이 정해지지 않아 마진 집계에서는 뺐습니다 — 청구하면 그 달 마진에 잡힙니다.
-          </p>
-        )}
       </section>
 
       {/* 세금계산서 */}
@@ -283,9 +314,16 @@ function Hero({
 function Mini({
   label, value, tone, note, href,
 }: {
-  label: string; value: string; tone: 'jade' | 'clay' | 'gold'; note?: string; href?: string
+  label: string
+  value: string
+  /** slate = 강조하지 않는 값 (그냥 숫자) */
+  tone: 'jade' | 'clay' | 'gold' | 'slate'
+  note?: string
+  href?: string
 }) {
-  const color = tone === 'jade' ? 'text-jade' : tone === 'clay' ? 'text-clay' : 'text-gold'
+  const color = tone === 'jade' ? 'text-jade'
+    : tone === 'clay' ? 'text-clay'
+      : tone === 'gold' ? 'text-gold' : 'text-ink'
   const body = (
     <>
       <p className="text-xs text-ink-muted">{label}</p>

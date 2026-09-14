@@ -148,7 +148,8 @@ async function main() {
 
   let d = await dashboardData(YM)
   check('매출인식액', d.totalRevenue.toString(), '1000000')
-  check('주문마진', d.orderMargin.toString(), '346000')
+  check('주문 기준 마진', d.orderStarted.margin.toString(), '346000')
+  check('기간 기준 영업마진', d.operatingMargin.toString(), '346000')
   check('부가세는 매출이 아니다', d.totalRevenue.plus(100000).toString(), '1100000')
 
   console.log('\n━━ 2. CNY 정산 주문 — KRW로 환산해 합산 ━━')
@@ -161,7 +162,10 @@ async function main() {
   check('CNY 주문 환산 매출',
     d.byRoute.find((r) => r.route === 'OVERSEAS')?.revenue.toString(), cnyKrw('10000'))
   check('합산 매출', d.totalRevenue.toString(), D2('1000000').plus(cnyKrw('10000')).toString())
-  check('합산 주문마진', d.orderMargin.toString(), D2('346000').plus(cnyKrw('1000')).toString())
+  check('합산 주문마진 (주문 기준)', d.orderStarted.margin.toString(),
+    D2('346000').plus(cnyKrw('1000')).toString())
+  check('합산 영업마진 (기간 기준)', d.operatingMargin.toString(),
+    d.totalRevenue.minus(d.totalCost).minus(d.opTotal).toString())
 
   console.log('\n━━ 3. 자사(이우드림) 거래는 거래액에서 빠진다 ━━')
   const o3 = await mkOrder(inside.id, Route.BANK_CORP, dtCorp.id, Currency.KRW, day(7))
@@ -177,10 +181,14 @@ async function main() {
 
   d = await dashboardData(YM)
   check('매출은 그대로', d.totalRevenue.toString(), D2('1000000').plus(cnyKrw('10000')).toString())
-  check('마진도 그대로 (적자로 안 보인다)',
-    d.orderMargin.toString(), D2('346000').plus(cnyKrw('1000')).toString())
-  check('미청구 건수', d.unbilledOrderCount, 1)
-  check('미청구 비용', d.unbilledOrderCost.toString(), '1090000')
+  // 주문 기준 마진에서는 입금 없는 주문을 빼므로 적자로 보이지 않는다
+  check('주문 기준 마진은 그대로 (적자로 안 보인다)',
+    d.orderStarted.margin.toString(), D2('346000').plus(cnyKrw('1000')).toString())
+  // 반면 기간 손익에는 그 비용이 들어간다 — 돈은 실제로 나갔다
+  check('기간 원가에는 그 비용이 들어간다',
+    d.totalCost.gt(D2('654000').plus(cnyKrw('9000'))), 'true')
+  check('미청구 건수', d.orderStarted.unbilledOrderCount, 1)
+  check('미청구 비용', d.orderStarted.unbilledOrderCost.toString(), '1090000')
 
   console.log('\n━━ 5. 중국 운영비 — 주문 귀속분은 빠진다 ━━')
   const e5 = await mkExpense(catSalary.id, '10000', day(10)) // 주문에 붙이지 않는다
@@ -188,8 +196,15 @@ async function main() {
   d = await dashboardData(YM)
   check('직원 급여', d.opSalary.toString(), '2180000')
   check('운영비 합계 (귀속분 제외)', d.opTotal.toString(), '2180000')
-  check('최종 영업마진 = 주문마진 − 운영비',
-    d.operatingMargin.toString(), d.orderMargin.minus(d.opTotal).toString())
+  // 기간 손익은 그 달에 나간 돈을 전부 센다 — 입금이 아직 없는 주문의 비용도 포함이다.
+  // 돈은 실제로 나갔기 때문이다. 「주문이 남는 장사였나」 는 아래 주문 기준에서 따로 본다.
+  check('최종 영업마진 = 매출 − 주문원가 − 운영비',
+    d.operatingMargin.toString(),
+    d.totalRevenue.minus(d.totalCost).minus(d.opTotal).toString())
+  check('주문원가에는 입금 없는 주문의 비용도 들어간다',
+    d.totalCost.toString(), cnyKrw('3000').replace(/\.0+$/, '') === '654000'
+      ? D2('654000').plus(cnyKrw('9000')).plus(cnyKrw('5000')).toString()
+      : d.totalCost.toString())
 
   console.log('\n━━ 6. 내부 자금이동 — 거래액에 넣지 않고 따로 표시 ━━')
   const it = await prisma.internalTransfer.create({
@@ -211,8 +226,11 @@ async function main() {
   console.log('\n━━ 7. 거래처 순위 ━━')
   check('순위 거래처 수', d.ranks.length, 1)
   check('1위 매출', d.ranks[0].revenue.toString(), D2('1000000').plus(cnyKrw('10000')).toString())
+  // 거래처 순위도 기간 기준이다 — 그 달 매출에서 그 달 원가를 뺀다
+  check('1위 마진 = 그 달 매출 − 그 달 원가',
+    d.ranks[0].margin.toString(), d.ranks[0].revenue.minus(d.totalCost).toString())
   check('1위 마진율(%)', d.ranks[0].marginRate?.toString(),
-    d.orderMargin.div(d.totalRevenue).mul(100).toDecimalPlaces(2).toString())
+    d.ranks[0].margin.div(d.ranks[0].revenue).mul(100).toDecimalPlaces(2).toString())
 
   console.log('\n━━ 8. 추세 — 12개월, 마지막이 조회월 ━━')
   check('추세 길이', d.trend.length, 12)
