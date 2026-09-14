@@ -1,6 +1,6 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidate } from '@/lib/revalidate'
 import { redirect } from 'next/navigation'
 import { Prisma, InvoiceStatus, AuditAction, type VatMode } from '@prisma/client'
 import { prisma } from '@/lib/db'
@@ -118,7 +118,7 @@ export async function createInvoice(_prev: ActionState, formData: FormData): Pro
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/invoices')
+  revalidate('/invoices')
   redirect(`/invoices?created=${newId}`)
 }
 
@@ -149,7 +149,7 @@ export async function issueInvoice(_prev: ActionState, formData: FormData): Prom
     })
   })
 
-  revalidatePath('/invoices')
+  revalidate('/invoices')
   return { ok: '발행 처리했습니다.' }
 }
 
@@ -176,6 +176,6 @@ export async function cancelInvoice(_prev: ActionState, formData: FormData): Pro
     })
   })
 
-  revalidatePath('/invoices')
+  revalidate('/invoices')
   return { ok: '세금계산서를 취소했습니다.' }
 }

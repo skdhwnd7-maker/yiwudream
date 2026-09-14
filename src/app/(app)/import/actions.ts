@@ -1,7 +1,7 @@
 'use server'
 
 import { redirect } from 'next/navigation'
-import { revalidatePath } from 'next/cache'
+import { revalidate } from '@/lib/revalidate'
 import { ImportStatus } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { requirePermission, auditContext } from '@/lib/session-guard'
@@ -45,7 +45,7 @@ export async function uploadFile(_prev: ActionState, formData: FormData): Promis
   })
   await saveUpload(batch.id, bytes)
 
-  revalidatePath('/import')
+  revalidate('/import')
   redirect(`/import/${batch.id}`)
 }
 
@@ -78,7 +78,7 @@ export async function runImport(_prev: ActionState, formData: FormData): Promise
     await prisma.importBatch.delete({ where: { id: batchId } })
     const result = await commitPlan(wb, plan, opts, batch.fileName, BigInt(user.id), ctx)
     await saveUpload(BigInt(result.batchId), bytes)
-    revalidatePath('/import')
+    revalidate('/import')
     redirect(`/import/${result.batchId}`)
   } catch (e) {
     // redirect 는 예외로 동작하므로 그대로 흘려보낸다
@@ -123,7 +123,7 @@ export async function undoImport(_prev: ActionState, formData: FormData): Promis
   try {
     const ctx = await auditContext(user, reason)
     const r = await rollbackBatch(batchId, ctx)
-    revalidatePath('/import')
+    revalidate('/import')
     return {
       ok: `되돌렸습니다 — 주문 ${r.orders} · 입금 ${r.receipts} · 지출 ${r.expenses} · `
         + `세금계산서 ${r.invoices} · 자금이동 ${r.transfers} · 급여 ${r.payrolls}건.`

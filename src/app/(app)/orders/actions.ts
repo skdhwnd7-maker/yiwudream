@@ -1,6 +1,6 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidate } from '@/lib/revalidate'
 import { redirect } from 'next/navigation'
 import {
   Prisma, Route, Entity, Currency, OrderStatus, InvoiceStatus,
@@ -228,8 +228,8 @@ export async function createOrderWithReceipt(_prev: ActionState, formData: FormD
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/orders')
-  revalidatePath('/partners')
+  revalidate('/orders')
+  revalidate('/partners')
   if (!newOrderId) return { ok: '예치금을 적립했습니다.' }
   redirect(`/orders/${newOrderId}?created=1`)
 }
@@ -331,7 +331,7 @@ export async function addReceipt(_prev: ActionState, formData: FormData): Promis
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath(`/orders/${orderId}`)
+  revalidate(`/orders/${orderId}`)
   return { ok: '입금을 추가했습니다.' }
 }
 
@@ -438,8 +438,8 @@ export async function addExpense(_prev: ActionState, formData: FormData): Promis
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  for (const a of allocs) revalidatePath(`/orders/${a.orderId}`)
-  revalidatePath('/orders')
+  for (const a of allocs) revalidate(`/orders/${a.orderId}`)
+  revalidate('/orders')
   return { ok: '지출을 등록했습니다.' }
 }
 
@@ -473,8 +473,8 @@ export async function settleOrder(_prev: ActionState, formData: FormData): Promi
     })
   })
 
-  revalidatePath(`/orders/${orderId}`)
-  revalidatePath('/orders')
+  revalidate(`/orders/${orderId}`)
+  revalidate('/orders')
   return { ok: '정산완료 처리했습니다. 이 주문의 전표는 이제 잠깁니다.' }
 }
 
@@ -499,7 +499,7 @@ export async function unlockOrder(_prev: ActionState, formData: FormData): Promi
     })
   })
 
-  revalidatePath(`/orders/${orderId}`)
+  revalidate(`/orders/${orderId}`)
   return { ok: '잠금을 해제했습니다. 이 기록은 변경이력에 남습니다.' }
 }
 
@@ -570,7 +570,7 @@ export async function voidReceipt(_prev: ActionState, formData: FormData): Promi
     return { error: e instanceof Error ? e.message : '취소 중 오류가 발생했습니다.' }
   }
 
-  if (receipt.orderId) revalidatePath(`/orders/${receipt.orderId}`)
+  if (receipt.orderId) revalidate(`/orders/${receipt.orderId}`)
   return { ok: '입금 전표를 취소했습니다. 행은 이력으로 남습니다.' }
 }
 
@@ -606,7 +606,7 @@ export async function voidExpense(_prev: ActionState, formData: FormData): Promi
     })
   })
 
-  for (const a of expense.allocs) revalidatePath(`/orders/${a.orderId}`)
+  for (const a of expense.allocs) revalidate(`/orders/${a.orderId}`)
   return { ok: '지출 전표를 취소했습니다.' }
 }
 
@@ -679,6 +679,6 @@ export async function updateReceiptAmount(_prev: ActionState, formData: FormData
     return { error: e instanceof Error ? e.message : '수정 중 오류가 발생했습니다.' }
   }
 
-  if (receipt.orderId) revalidatePath(`/orders/${receipt.orderId}`)
+  if (receipt.orderId) revalidate(`/orders/${receipt.orderId}`)
   return { ok: '금액을 수정했습니다.' }
 }

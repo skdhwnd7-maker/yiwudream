@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
 import { getSession, can, type Permission, type SessionUser } from './auth'
+import { testContext } from './request-context'
 import type { AuditContext } from './audit'
 
 /** 로그인 필수 페이지·액션에서 쓴다. 없으면 로그인 화면으로 보낸다. */
@@ -18,6 +19,10 @@ export async function requirePermission(permission: Permission): Promise<Session
 
 /** 서버 액션에서 변경이력 컨텍스트를 만든다. */
 export async function auditContext(user: SessionUser, reason?: string): Promise<AuditContext> {
+  const override = testContext()
+  if (override) {
+    return { user: { id: user.id, name: user.name }, reason, ipAddress: override.ipAddress }
+  }
   const h = await headers()
   const ip =
     h.get('x-forwarded-for')?.split(',')[0]?.trim() ??

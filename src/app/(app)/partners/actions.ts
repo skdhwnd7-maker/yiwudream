@@ -1,6 +1,6 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidate } from '@/lib/revalidate'
 import { z } from 'zod'
 import { Prisma, Route } from '@prisma/client'
 import { prisma } from '@/lib/db'
@@ -104,7 +104,7 @@ export async function createPartner(_prev: ActionState, formData: FormData): Pro
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/partners')
+  revalidate('/partners')
   return { ok: `${baseName} 거래처를 등록했습니다.` }
 }
 
@@ -162,8 +162,8 @@ export async function updatePartner(_prev: ActionState, formData: FormData): Pro
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/partners')
-  revalidatePath(`/partners/${id}`)
+  revalidate('/partners')
+  revalidate(`/partners/${id}`)
   return { ok: '저장했습니다.' }
 }
 
@@ -179,7 +179,7 @@ export async function togglePartnerActive(_prev: ActionState, formData: FormData
     await tx.partner.update({ where: { id }, data: { isActive: !partner.isActive, updatedBy: BigInt(user.id) } })
   })
 
-  revalidatePath('/partners')
+  revalidate('/partners')
   return { ok: partner.isActive ? '비활성 처리했습니다.' : '다시 활성화했습니다.' }
 }
 
@@ -204,7 +204,7 @@ export async function addAlias(_prev: ActionState, formData: FormData): Promise<
     await logCreate(tx, 'partner_aliases', created.id, { partnerId: partnerId.toString(), alias }, await auditContext(user))
   })
 
-  revalidatePath(`/partners/${partnerId}`)
+  revalidate(`/partners/${partnerId}`)
   return { ok: `별칭 "${alias}"을 추가했습니다.` }
 }
 
@@ -219,7 +219,7 @@ export async function removeAlias(_prev: ActionState, formData: FormData): Promi
     await tx.partnerAlias.delete({ where: { id } })
   })
 
-  revalidatePath(`/partners/${alias.partnerId}`)
+  revalidate(`/partners/${alias.partnerId}`)
   return { ok: '별칭을 삭제했습니다.' }
 }
 
@@ -304,6 +304,6 @@ export async function mergePartners(_prev: ActionState, formData: FormData): Pro
     return { error: e instanceof Error ? e.message : '병합 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/partners')
+  revalidate('/partners')
   return { ok: `${sources.length}개 거래처를 ${target.name}(으)로 병합했습니다.` }
 }

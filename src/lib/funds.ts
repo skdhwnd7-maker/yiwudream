@@ -92,11 +92,13 @@ export async function accountBalances(asOf?: Date): Promise<AccountBalance[]> {
 
   const out: AccountBalance[] = []
   for (const a of accounts) {
-    const [inflow, outflow, remitOut, remitFee, remitIn, transferOut, transferIn] = await Promise.all([
+    const [inflow, outflow, remitOut, remitIn, transferOut, transferIn] = await Promise.all([
       prisma.receipt.aggregate({
         where: { accountId: a.id, isVoid: false, ...(dateFilter ? { receiptDate: dateFilter } : {}) },
         _sum: { amount: true },
       }),
+      // 송금수수료는 BANK_FEE 지출 전표로 남아 여기 이미 포함된다.
+      // remittance.bankFeeKrw 를 또 빼면 같은 수수료가 두 번 빠진다.
       prisma.expense.aggregate({
         where: {
           accountId: a.id, isVoid: false, paymentStatus: 'PAID',
@@ -104,11 +106,14 @@ export async function accountBalances(asOf?: Date): Promise<AccountBalance[]> {
         },
         _sum: { amount: true },
       }),
+      // DRAFT 는 아직 은행에 넣지 않은 전표다. 통장에서 빠지지 않았다.
       prisma.remittance.aggregate({
-        where: { fromAccountId: a.id, isVoid: false, status: { not: 'CANCELLED' }, ...(dateFilter ? { remitDate: dateFilter } : {}) },
-        _sum: { krwAmount: true, bankFeeKrw: true },
+        where: {
+          fromAccountId: a.id, isVoid: false, status: { in: ['SENT', 'ARRIVED'] },
+          ...(dateFilter ? { remitDate: dateFilter } : {}),
+        },
+        _sum: { krwAmount: true },
       }),
-      Promise.resolve(null),
       prisma.remittance.aggregate({
         where: { toAccountId: a.id, isVoid: false, status: 'ARRIVED', ...(dateFilter ? { remitDate: dateFilter } : {}) },
         _sum: { cnyArrivalAmount: true },
@@ -128,9 +133,9 @@ export async function accountBalances(asOf?: Date): Promise<AccountBalance[]> {
       .minus(outflow._sum.amount ?? 0)
 
     if (a.currency === 'KRW') {
+      // 송금수수료(bankFeeKrw)는 여기서 빼지 않는다 — 위 outflow 의 BANK_FEE 전표가 이미 뺐다
       bal = bal
         .minus(remitOut._sum.krwAmount ?? 0)
-        .minus(remitOut._sum.bankFeeKrw ?? 0)
         .minus(transferOut._sum.krwAmount ?? 0)
         .minus(transferOut._sum.bankFee ?? 0)
     } else if (a.currency === 'CNY') {
@@ -281,7 +286,9 @@ export interface RemitPendingRow {
   goodsFund: Prisma.Decimal
   remitted: Prisma.Decimal
   pending: Prisma.Decimal
-  status: 'PENDING' | 'PARTIAL' | 'DONE'
+  /** 예치금보다 많이 보낸 금액. 0이어야 정상이다 */
+  excess: Prisma.Decimal
+  status: 'PENDING' | 'PARTIAL' | 'DONE' | 'OVER'
   orderDate: Date
 }
 
@@ -306,6 +313,7 @@ export async function listRemitPending(includeDone = false): Promise<RemitPendin
       orderId: o.id.toString(), orderNo: o.orderNo,
       partnerId: o.partner.id.toString(), partnerName: o.partner.name,
       goodsFund: s.depositGoodsIn, remitted: s.remitted, pending: s.remitPending,
+      excess: s.remitExcess,
       status: s.remitStatus === 'NONE' ? 'PENDING' : s.remitStatus,
       orderDate: o.orderDate,
     })

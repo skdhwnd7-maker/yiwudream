@@ -1,6 +1,6 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidate } from '@/lib/revalidate'
 import { Prisma, Entity, Route, Currency, CostType, RevenueBasis, InvoiceBase, VatMode, Rounding, Role } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { requirePermission, auditContext } from '@/lib/session-guard'
@@ -63,7 +63,7 @@ export async function saveAccount(_prev: ActionState, formData: FormData): Promi
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/settings/accounts')
+  revalidate('/settings/accounts')
   return { ok: '저장했습니다.' }
 }
 
@@ -77,7 +77,7 @@ export async function toggleAccountActive(_prev: ActionState, formData: FormData
     await logUpdate(tx, 'accounts', id, { isActive: acc.isActive }, { isActive: !acc.isActive }, await auditContext(user, '계좌 사용 여부 변경'))
     await tx.account.update({ where: { id }, data: { isActive: !acc.isActive, updatedBy: BigInt(user.id) } })
   })
-  revalidatePath('/settings/accounts')
+  revalidate('/settings/accounts')
   return { ok: acc.isActive ? '사용 중지했습니다.' : '다시 사용합니다.' }
 }
 
@@ -123,7 +123,7 @@ export async function saveCategory(_prev: ActionState, formData: FormData): Prom
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/settings/categories')
+  revalidate('/settings/categories')
   return { ok: '저장했습니다.' }
 }
 
@@ -184,7 +184,7 @@ export async function saveDealType(_prev: ActionState, formData: FormData): Prom
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/settings/deal-types')
+  revalidate('/settings/deal-types')
   return { ok: '저장했습니다.' }
 }
 
@@ -241,7 +241,7 @@ export async function saveUser(_prev: ActionState, formData: FormData): Promise<
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/settings/users')
+  revalidate('/settings/users')
   return { ok: '저장했습니다.' }
 }
 
@@ -261,7 +261,7 @@ export async function toggleUserActive(_prev: ActionState, formData: FormData): 
     await logUpdate(tx, 'users', id, { isActive: target.isActive }, { isActive: !target.isActive }, await auditContext(admin, '계정 사용 여부 변경'))
     await tx.user.update({ where: { id }, data: { isActive: !target.isActive } })
   })
-  revalidatePath('/settings/users')
+  revalidate('/settings/users')
   return { ok: target.isActive ? '계정을 비활성화했습니다.' : '계정을 활성화했습니다.' }
 }
 
@@ -281,6 +281,6 @@ export async function saveSetting(_prev: ActionState, formData: FormData): Promi
     await tx.setting.update({ where: { key }, data: { value } })
   })
 
-  revalidatePath('/settings/global')
+  revalidate('/settings/global')
   return { ok: '저장했습니다.' }
 }

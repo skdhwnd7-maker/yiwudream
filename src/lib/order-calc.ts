@@ -61,9 +61,14 @@ export interface OrderSummary {
   receivable: Prisma.Decimal
   /** 중국 송금 완료액 */
   remitted: Prisma.Decimal
-  /** 송금 대기액 = 상품구매 예치금 − 송금완료 */
+  /** 송금 대기액 = 상품구매 예치금 − 송금완료 (0 미만은 0으로 본다) */
   remitPending: Prisma.Decimal
-  remitStatus: 'NONE' | 'PENDING' | 'PARTIAL' | 'DONE'
+  /**
+   * 예치금보다 더 보낸 금액. 0이어야 정상이다.
+   * 대기액을 0으로 자르면 초과송금이 화면에서 사라지므로 따로 들고 다닌다.
+   */
+  remitExcess: Prisma.Decimal
+  remitStatus: 'NONE' | 'PENDING' | 'PARTIAL' | 'DONE' | 'OVER'
 }
 
 const zero = () => new Prisma.Decimal(0)
@@ -137,8 +142,13 @@ function computeSummary(orderId: bigint, input: SummaryInput): OrderSummary {
   )
   const remitPending = depGoods.minus(remitted)
 
+  const remitExcess = remitted.gt(depGoods) ? remitted.minus(depGoods) : zero()
+
   let remitStatus: OrderSummary['remitStatus'] = 'NONE'
-  if (depGoods.gt(0)) {
+  if (remitExcess.gt(0)) {
+    // 예치금보다 많이 보냈다. 정상적으로는 나올 수 없는 상태다 — 숨기지 않고 드러낸다
+    remitStatus = 'OVER'
+  } else if (depGoods.gt(0)) {
     if (remitted.lte(0)) remitStatus = 'PENDING'
     else if (remitted.gte(depGoods)) remitStatus = 'DONE'
     else remitStatus = 'PARTIAL'
@@ -161,6 +171,7 @@ function computeSummary(orderId: bigint, input: SummaryInput): OrderSummary {
     receivable,
     remitted,
     remitPending: remitPending.gt(0) ? remitPending : zero(),
+    remitExcess,
     remitStatus,
   }
 }

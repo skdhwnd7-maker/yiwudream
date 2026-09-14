@@ -1,6 +1,6 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidate } from '@/lib/revalidate'
 import { Prisma, Entity, Currency, PaymentStatus } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { requirePermission, auditContext } from '@/lib/session-guard'
@@ -67,7 +67,7 @@ export async function saveEmployee(_prev: ActionState, formData: FormData): Prom
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/payroll')
+  revalidate('/payroll')
   return { ok: '저장했습니다.' }
 }
 
@@ -85,7 +85,7 @@ export async function toggleEmployeeActive(_prev: ActionState, formData: FormDat
       data: { isActive: !emp.isActive, resignDate: emp.isActive ? new Date() : null },
     })
   })
-  revalidatePath('/payroll')
+  revalidate('/payroll')
   return { ok: emp.isActive ? '퇴사 처리했습니다.' : '재직으로 되돌렸습니다.' }
 }
 
@@ -196,6 +196,6 @@ export async function savePayroll(_prev: ActionState, formData: FormData): Promi
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
-  revalidatePath('/payroll')
+  revalidate('/payroll')
   return { ok: `${yearMonth} 급여를 저장했습니다.` }
 }

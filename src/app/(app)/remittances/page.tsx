@@ -97,8 +97,16 @@ export default async function RemittancesPage({
                   <td className="n text-sm text-jade">{fmtKrw(r.remitted)}</td>
                   <td className="n text-sm font-medium text-clay">{fmtKrw(r.pending)}</td>
                   <td className="text-xs">
-                    <span className={r.status === 'DONE' ? 'pill-good' : r.status === 'PARTIAL' ? 'pill-gold' : 'pill-warn'}>
-                      {r.status === 'DONE' ? '완료' : r.status === 'PARTIAL' ? '일부송금' : '대기'}
+                    <span className={
+                      r.status === 'OVER' ? 'pill-warn'
+                        : r.status === 'DONE' ? 'pill-good'
+                          : r.status === 'PARTIAL' ? 'pill-gold' : 'pill-warn'
+                    } title={r.status === 'OVER'
+                      ? `예치금보다 ${r.excess.toDecimalPlaces(0).toString()}원 더 보냈습니다. 확인이 필요합니다.`
+                      : undefined}>
+                      {r.status === 'OVER' ? '초과송금 ⚠'
+                        : r.status === 'DONE' ? '완료'
+                          : r.status === 'PARTIAL' ? '일부송금' : '대기'}
                     </span>
                   </td>
                 </tr>

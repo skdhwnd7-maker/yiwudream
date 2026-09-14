@@ -41,9 +41,23 @@ async function main() {
   check('검증용 달이 비어 있다', before.totalRevenue.toString(), '0')
 
   // CNY 정산 주문을 원화로 환산할 때 대시보드가 쓰는 환율.
-  // 최근 입금 전표에서 가져오므로 DB 상태에 따라 달라진다 — 고정값으로 기대하면 안 된다.
+  // 최근 입금 전표에서 가져오므로 DB 상태에 따라 달라진다 — 고정값으로 기대하면 안 되고,
+  // 참고환율을 하나 깔아 두어 빈 DB에서도 같은 결과가 나오게 한다.
+  const REF_RATE = D2('218')
+  await prisma.fxRateRef.upsert({
+    where: {
+      rateDate_baseCurrency_quoteCurrency: {
+        rateDate: day(1), baseCurrency: 'CNY', quoteCurrency: 'KRW',
+      },
+    },
+    update: { rate: REF_RATE },
+    create: {
+      rateDate: day(1), baseCurrency: 'CNY', quoteCurrency: 'KRW',
+      rate: REF_RATE, source: 'verify-phase5',
+    },
+  })
   const fx = await latestFxRate()
-  if (!fx) throw new Error('환산환율을 구할 수 없습니다. 입금 전표가 하나도 없습니다.')
+  if (!fx) throw new Error('환산환율을 구할 수 없습니다.')
   const cnyKrw = (v: string) => D2(v).mul(fx).toString()
   console.log(`  (CNY 환산환율 ${fx.toString()})`)
 
@@ -222,6 +236,8 @@ async function main() {
   await prisma.receipt.deleteMany({ where: { id: { in: receipts.map((r) => r.id) } } })
   await prisma.order.deleteMany({ where: { id: { in: orderIds } } })
   await prisma.partner.deleteMany({ where: { id: { in: [outside.id, inside.id] } } })
+
+  await prisma.fxRateRef.deleteMany({ where: { source: 'verify-phase5' } })
 
   const after = await dashboardData(YM)
   check('정리 후 원상복구', after.totalRevenue.toString(), '0')
