@@ -10,6 +10,7 @@ import { ROUTE_LABEL, ORDER_STATUS_LABEL, SPLIT_KIND_LABEL, SPLIT_OWNER, VAT_MOD
 import { can } from '@/lib/permissions'
 import OrderActions from './OrderActions'
 import VoidReceiptButton from './VoidReceiptButton'
+import VoidExpenseButton from '@/components/VoidExpenseButton'
 import AddReceiptPanel from './AddReceiptPanel'
 import AddExpensePanel from './AddExpensePanel'
 
@@ -297,11 +298,12 @@ export default async function OrderDetailPage({
                 <th className="w-20 n">환율</th>
                 <th className="w-28 n">이 주문 배분</th>
                 <th className="w-20">지급</th>
+                <th className="w-24"></th>
               </tr>
             </thead>
             <tbody>
               {order.expenseAllocs.length === 0 && (
-                <tr><td colSpan={7} className="py-6 text-center text-sm text-ink-muted">지출 내역이 없습니다.</td></tr>
+                <tr><td colSpan={8} className="py-6 text-center text-sm text-ink-muted">지출 내역이 없습니다.</td></tr>
               )}
               {order.expenseAllocs.map((a) => {
                 const e = a.expense
@@ -322,6 +324,11 @@ export default async function OrderDetailPage({
                       {e.paymentStatus === 'PAID'
                         ? <span className="pill-good">완료</span>
                         : <span className="pill-warn">예정</span>}
+                    </td>
+                    <td>
+                      {!locked && !e.isVoid && can(user.role, 'transaction.void') && (
+                        <VoidExpenseButton expenseId={e.id.toString()} />
+                      )}
                     </td>
                   </tr>
                 )

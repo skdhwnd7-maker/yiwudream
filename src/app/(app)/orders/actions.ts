@@ -647,6 +647,8 @@ export async function voidExpense(_prev: ActionState, formData: FormData): Promi
   })
 
   for (const a of expense.allocs) revalidate(`/orders/${a.orderId}`)
+  // 주문에 안 붙은 운영비도 이 액션으로 취소한다. 그 화면들도 같이 새로 그린다.
+  revalidate('/office', '/temp-labor', '/funds', '/')
   return { ok: '지출 전표를 취소했습니다.' }
 }
 

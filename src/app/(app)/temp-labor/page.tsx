@@ -5,6 +5,7 @@ import { fmtCny, fmtKrw, D } from '@/lib/money'
 import { fmtDate, plain } from '@/lib/serialize'
 import { can } from '@/lib/permissions'
 import ExpenseEntry from '../office/ExpenseEntry'
+import VoidExpenseButton from '@/components/VoidExpenseButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -113,11 +114,12 @@ export default async function TempLaborPage({
               <th className="w-28 n">원화 환산</th>
               <th className="w-48">귀속</th>
               <th className="w-24">지급일</th>
+              <th className="w-24"></th>
             </tr>
           </thead>
           <tbody>
             {expenses.length === 0 && (
-              <tr><td colSpan={6} className="py-8 text-center text-sm text-ink-muted">
+              <tr><td colSpan={7} className="py-8 text-center text-sm text-ink-muted">
                 등록된 임시공 비용이 없습니다.
               </td></tr>
             )}
@@ -148,6 +150,11 @@ export default async function TempLaborPage({
                   )}
                 </td>
                 <td className="num text-xs">{e.paidAt ? fmtDate(e.paidAt) : '—'}</td>
+                <td>
+                  {can(user.role, 'transaction.void') && (
+                    <VoidExpenseButton expenseId={e.id.toString()} />
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
