@@ -398,6 +398,7 @@ export async function commitPlan(
           })
           result.opExpenses++
           created.opExpenses.push(salaryExpense.id.toString())
+          let insuranceExpenseId: bigint | null = null
           if (e.insurance && e.insurance.gt(0) && insuranceCat) {
             const insExpense = await tx.expense.create({
               data: {
@@ -415,6 +416,7 @@ export async function commitPlan(
             })
             result.opExpenses++
             created.opExpenses.push(insExpense.id.toString())
+            insuranceExpenseId = insExpense.id
           }
           const payroll = await tx.payroll.create({
             data: {
@@ -424,6 +426,8 @@ export async function commitPlan(
               insuranceCompany: e.insurance ?? new Prisma.Decimal(0),
               currency: Currency.CNY, paidAt: payDate,
               expenseId: salaryExpense.id,
+              // 나중에 급여를 다시 입력하면 이 전표들이 같이 취소되어야 한다
+              insuranceExpenseId,
               memo: `엑셀 Sheet1 ${e.rowIndex}행`,
               createdBy: userId,
             },

@@ -19,7 +19,8 @@
     "db:purge-test": "tsx scripts/purge-test-data.ts",
     "db:demo": "tsx scripts/seed-demo.ts",
     "db:reset-demo": "psql \"${DATABASE_URL%%\\?*}\" -v ON_ERROR_STOP=1 -f scripts/db-reset-demo.sql && npm run db:seed && npm run db:demo",
-    "db:test-push": "tsx scripts/test-db-setup.ts"
+    "db:test-push": "tsx scripts/test-db-setup.ts",
+    "report:payroll-dup": "tsx scripts/report-payroll-duplicates.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.2.1",

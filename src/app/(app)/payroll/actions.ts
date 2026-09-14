@@ -1,10 +1,10 @@
 'use server'
 
 import { revalidate } from '@/lib/revalidate'
-import { Prisma, Entity, Currency, PaymentStatus } from '@prisma/client'
+import { Prisma, Entity, Currency, PaymentStatus, AuditAction } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { requirePermission, auditContext } from '@/lib/session-guard'
-import { logCreate, logUpdate, AuditReasonRequiredError } from '@/lib/audit'
+import { logCreate, logUpdate, logAction, AuditReasonRequiredError } from '@/lib/audit'
 import { nextDocNo } from '@/lib/numbering'
 import { cnyToKrw } from '@/lib/money'
 
@@ -143,11 +143,24 @@ export async function savePayroll(_prev: ActionState, formData: FormData): Promi
         await logUpdate(tx, 'payrolls', existing.id,
           { baseSalary: existing.baseSalary, actualPaid: existing.actualPaid, insuranceCompany: existing.insuranceCompany },
           { baseSalary, actualPaid, insuranceCompany }, ctx)
-        // 기존 지출 전표를 지우지 않고 취소한 뒤 새로 만든다
-        if (existing.expenseId) {
+
+        // 급여에서 파생된 전표는 급여·사회보험 둘 다 취소한다.
+        // 사회보험 쪽을 빠뜨리면 옛 전표가 살아남아 같은 달 사회보험이 두 번 잡힌다.
+        const stale = [existing.expenseId, existing.insuranceExpenseId]
+          .filter((x): x is bigint => x !== null)
+        for (const expenseId of stale) {
+          const before = await tx.expense.findUnique({ where: { id: expenseId } })
+          if (!before || before.isVoid) continue
           await tx.expense.update({
-            where: { id: existing.expenseId },
-            data: { isVoid: true, voidReason: `${yearMonth} 급여 재입력`, voidedBy: BigInt(user.id), voidedAt: new Date() },
+            where: { id: expenseId },
+            data: {
+              isVoid: true, voidReason: `${yearMonth} 급여 재입력`,
+              voidedBy: BigInt(user.id), voidedAt: new Date(),
+            },
+          })
+          await logAction(tx, 'expenses', expenseId, AuditAction.VOID, ctx, {
+            field: 'isVoid', oldValue: 'false',
+            newValue: `true — ${yearMonth} 급여 재입력으로 취소 (${before.expenseNo}, ${before.amount})`,
           })
         }
       }
@@ -163,9 +176,10 @@ export async function savePayroll(_prev: ActionState, formData: FormData): Promi
         },
       })
 
+      let insuranceExpenseId: bigint | null = null
       if (insuranceCompany.gt(0)) {
         const insNo = await nextDocNo(tx, 'EX', payDate)
-        await tx.expense.create({
+        const insExpense = await tx.expense.create({
           data: {
             expenseNo: insNo, entity: Entity.CN, expenseDate: payDate, categoryId: catIns.id,
             vendorName: emp.nameCn ?? emp.name, currency: Currency.CNY, amount: insuranceCompany,
@@ -174,16 +188,28 @@ export async function savePayroll(_prev: ActionState, formData: FormData): Promi
             memo: `${yearMonth} 사회보험(회사부담) · ${emp.name}`, createdBy: BigInt(user.id),
           },
         })
+        insuranceExpenseId = insExpense.id
       }
 
       if (existing) {
         await tx.payroll.update({
           where: { id: existing.id },
-          data: { ...data, expenseId: salaryExpense.id, updatedBy: BigInt(user.id) },
+          data: {
+            ...data, expenseId: salaryExpense.id, insuranceExpenseId,
+            updatedBy: BigInt(user.id),
+          },
+        })
+        await logAction(tx, 'payrolls', existing.id, AuditAction.UPDATE, ctx, {
+          field: 'expenses',
+          oldValue: `급여 ${existing.expenseId ?? '없음'} / 사회보험 ${existing.insuranceExpenseId ?? '없음'}`,
+          newValue: `급여 ${salaryExpense.id} / 사회보험 ${insuranceExpenseId ?? '없음'}`,
         })
       } else {
         const created = await tx.payroll.create({
-          data: { ...data, expenseId: salaryExpense.id, createdBy: BigInt(user.id) },
+          data: {
+            ...data, expenseId: salaryExpense.id, insuranceExpenseId,
+            createdBy: BigInt(user.id),
+          },
         })
         await logCreate(tx, 'payrolls', created.id, {
           yearMonth, employee: emp.name, actualPaid: actualPaid.toString(),

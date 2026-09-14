@@ -371,6 +371,176 @@ async function main() {
     check('대기액은 0으로 표시하되 초과분은 따로 남는다', sum2.remitPending.toString(), '0')
   }
 
+  // ════════════════════════════════════════════════════════════
+  console.log('\n━━ 8. 급여 재입력 시 사회보험 전표 중복 ━━')
+  {
+    const { savePayroll } = await import('../src/app/(app)/payroll/actions')
+    const catIns = await prisma.expenseCategory.findFirstOrThrow({ where: { code: 'INSURANCE' } })
+    const emp = await prisma.employee.create({
+      data: { empCode: `AE${stamp}`, name: `감사직원${stamp}`, nameCn: `감사直員${stamp}` },
+    })
+    const YM = '2019-07'
+    const insCount = async () => prisma.expense.count({
+      where: { categoryId: catIns.id, isVoid: false, memo: { contains: `${YM} 사회보험(회사부담) · ${emp.name}` } },
+    })
+    const insSum = async () => (await prisma.expense.aggregate({
+      where: { categoryId: catIns.id, isVoid: false, memo: { contains: `${YM} 사회보험(회사부담) · ${emp.name}` } },
+      _sum: { amount: true },
+    }))._sum.amount?.toString() ?? '0'
+
+    const save = (insurance: string, reason?: string) => runAsUser(owner, () => call(() => savePayroll({}, fd({
+      yearMonth: YM, employeeId: emp.id.toString(),
+      baseSalary: '9000', actualPaid: '9000',
+      insuranceCompany: insurance, fxRate: '218',
+      paidAt: `${YM}-05`, ...(reason ? { reason } : {}),
+    }))))
+
+    const first = await save('1416') as { error?: string }
+    check('첫 저장', first.error ?? 'ok', 'ok')
+    check('사회보험 전표 1건', await insCount(), 1)
+
+    // 같은 달을 다시 저장 — 옛 사회보험 전표가 살아남으면 두 건이 된다
+    const second = await save('1500', '금액 정정') as { error?: string }
+    check('재입력 저장', second.error ?? 'ok', 'ok')
+    check('재입력 뒤에도 사회보험 전표는 1건', await insCount(), 1)
+    check('금액은 새 값만 잡힌다', await insSum(), '1500')
+
+    // 사회보험을 0으로 지우면 전표도 남지 않아야 한다
+    const third = await save('0', '사회보험 없음') as { error?: string }
+    check('사회보험 0으로 수정', third.error ?? 'ok', 'ok')
+    check('사회보험 전표가 사라진다', await insCount(), 0)
+
+    const payroll = await prisma.payroll.findFirstOrThrow({
+      where: { employeeId: emp.id, yearMonth: YM },
+    })
+    check('급여가 급여 전표를 붙들고 있다', payroll.expenseId !== null, true)
+    check('사회보험이 없으면 연결도 비어 있다', payroll.insuranceExpenseId, 'null')
+
+    // 변경이력에 취소가 남았는가
+    const voids = await prisma.auditLog.count({
+      where: { tableName: 'expenses', action: 'VOID', newValue: { contains: '급여 재입력' } },
+    })
+    check('취소가 변경이력에 남는다', voids >= 2, true)
+
+    await prisma.payroll.deleteMany({ where: { employeeId: emp.id } })
+    await prisma.expense.deleteMany({ where: { vendorName: emp.nameCn ?? emp.name } })
+    await prisma.employee.delete({ where: { id: emp.id } })
+  }
+
+  // ════════════════════════════════════════════════════════════
+  console.log('\n━━ 9. 세금계산서 안전장치 ━━')
+  {
+    const { createInvoice, cancelInvoice } = await import('../src/app/(app)/invoices/actions')
+    const dtFull = await prisma.dealType.findFirstOrThrow({ where: { code: 'CORP_FULL' } })
+    const dtNobill = await prisma.dealType.findFirstOrThrow({ where: { code: 'CORP_NOBILL' } })
+    const accCorp = await prisma.account.findFirstOrThrow({ where: { route: Route.BANK_CORP } })
+
+    const partner2 = await prisma.partner.create({
+      data: { code: `B${stamp}`, name: `계산서검증${stamp}`, nameNormalized: `b${stamp}`, createdBy: admin.id },
+    })
+
+    async function corpOrder(supply: string, vat: string, dealTypeId: bigint, no: string, pid = partner2.id) {
+      const order = await prisma.order.create({
+        data: {
+          orderNo: `AI${stamp}-${no}`, partnerId: pid, route: Route.BANK_CORP,
+          dealTypeId, accountingClass: '상품매출', entity: Entity.KR,
+          settlementCurrency: Currency.KRW, orderDate: new Date(),
+          invoiceStatus: InvoiceStatus.NONE, createdBy: admin.id,
+        },
+      })
+      const total = D(supply).plus(D(vat))
+      const receipt = await prisma.receipt.create({
+        data: {
+          receiptNo: `AIR${stamp}-${no}`, orderId: order.id, partnerId: pid,
+          accountId: accCorp.id, route: Route.BANK_CORP, entity: Entity.KR,
+          receiptDate: new Date(), currency: Currency.KRW, amount: total,
+          amountKrw: total, createdBy: admin.id,
+        },
+      })
+      await prisma.$transaction(async (tx) => {
+        await tx.receiptSplit.create({
+          data: { receiptId: receipt.id, splitKind: SplitKind.SALES, amount: D(supply), amountKrw: D(supply) },
+        })
+        await tx.receiptSplit.create({
+          data: { receiptId: receipt.id, splitKind: SplitKind.VAT, amount: D(vat), amountKrw: D(vat) },
+        })
+      })
+      return order
+    }
+
+    // 세무 규칙이 다르면 한 장으로 못 묶는다
+    const oFull = await corpOrder('1000000', '100000', dtFull.id, 'c1')
+    const oNobill = await corpOrder('500000', '50000', dtNobill.id, 'c2')
+    const mixed = await runAsUser(owner, () => call(() => createInvoice({}, fd({
+      orderId: [oFull.id.toString(), oNobill.id.toString()], issueNow: 'on',
+    })))) as { error?: string }
+    checkLike('세무 규칙이 다르면 묶이지 않는다', mixed.error, '한 장으로 묶을 수 없습니다')
+    checkLike('무엇이 다른지 알려 준다', mixed.error, '발행 기준')
+
+    // 거래처가 다르면 못 묶는다
+    const partner3 = await prisma.partner.create({
+      data: { code: `C${stamp}`, name: `다른거래처${stamp}`, nameNormalized: `c${stamp}`, createdBy: admin.id },
+    })
+    const oOther = await corpOrder('300000', '30000', dtFull.id, 'c3', partner3.id)
+    const diffPartner = await runAsUser(owner, () => call(() => createInvoice({}, fd({
+      orderId: [oFull.id.toString(), oOther.id.toString()], issueNow: 'on',
+    })))) as { error?: string }
+    checkLike('거래처가 다르면 묶이지 않는다', diffPartner.error, '거래처가 달라')
+
+    // 같은 규칙 두 건은 묶인다 — 금액은 비율대로
+    const oBig = await corpOrder('3000000', '300000', dtFull.id, 'c4')
+    await runAsUser(owner, () => call(() => createInvoice({}, fd({
+      orderId: [oFull.id.toString(), oBig.id.toString()], issueNow: 'on',
+    }))))
+    const inv = await prisma.invoice.findFirstOrThrow({
+      where: { partnerId: partner2.id }, orderBy: { id: 'desc' }, include: { orders: true },
+    })
+    check('한 장으로 묶인다', inv.orders.length, 2)
+    check('주문별 금액 합 = 발행 대상금액',
+      inv.orders.reduce((s2, x) => s2.plus(x.amount), D(0)).toString(), inv.targetAmount.toString())
+    const small = inv.orders.find((x) => x.orderId === oFull.id)!
+    const big = inv.orders.find((x) => x.orderId === oBig.id)!
+    check('작은 주문은 1,000,000', small.amount.toString(), '1000000')
+    check('큰 주문은 3,000,000 (N등분이 아니다)', big.amount.toString(), '3000000')
+
+    // 이미 묶인 주문은 다시 못 묶는다
+    const again = await runAsUser(owner, () => call(() => createInvoice({}, fd({
+      orderId: [oFull.id.toString()], issueNow: 'on',
+    })))) as { error?: string }
+    checkLike('이미 계산서에 들어간 주문은 다시 못 넣는다', again.error, '이미 세금계산서에 들어간 주문')
+
+    // 계산서를 하나 더 만들어 취소 시 상태 재계산을 본다
+    const invA = inv
+    await prisma.invoiceOrder.deleteMany({ where: { invoiceId: invA.id, orderId: oBig.id } })
+    await runAsUser(owner, () => call(() => createInvoice({}, fd({
+      orderId: [oBig.id.toString()], issueNow: 'on',
+    }))))
+    const invB = await prisma.invoice.findFirstOrThrow({
+      where: { orders: { some: { orderId: oBig.id } }, id: { not: invA.id } }, orderBy: { id: 'desc' },
+    })
+    // oBig 을 invA 에도 다시 넣어 두 장에 걸치게 만든다 (현실에서 나올 수 있는 상태)
+    await prisma.invoiceOrder.create({
+      data: { invoiceId: invA.id, orderId: oBig.id, amount: D('3000000') },
+    })
+    await runAsUser(owner, () => call(() => cancelInvoice({}, fd({
+      invoiceId: invA.id.toString(), reason: '검증',
+    }))))
+    const bigAfter = await prisma.order.findUniqueOrThrow({ where: { id: oBig.id } })
+    check('다른 계산서가 살아 있으면 그 상태를 따른다', bigAfter.invoiceStatus, 'ISSUED')
+    const smallAfter = await prisma.order.findUniqueOrThrow({ where: { id: oFull.id } })
+    check('다른 계산서가 없으면 미발행으로 돌아간다', smallAfter.invoiceStatus, 'NONE')
+
+    // 정리
+    const ids = [oFull.id, oNobill.id, oOther.id, oBig.id]
+    await prisma.invoiceOrder.deleteMany({ where: { orderId: { in: ids } } })
+    await prisma.invoice.deleteMany({ where: { partnerId: { in: [partner2.id, partner3.id] } } })
+    const rs = await prisma.receipt.findMany({ where: { orderId: { in: ids } }, select: { id: true } })
+    await prisma.receiptSplit.deleteMany({ where: { receiptId: { in: rs.map((r) => r.id) } } })
+    await prisma.receipt.deleteMany({ where: { orderId: { in: ids } } })
+    await prisma.order.deleteMany({ where: { id: { in: ids } } })
+    await prisma.partner.deleteMany({ where: { id: { in: [partner2.id, partner3.id] } } })
+  }
+
   // ── 정리
   const orders = await prisma.order.findMany({ where: { partnerId: partner.id }, select: { id: true } })
   const orderIds = orders.map((o) => o.id)

@@ -689,7 +689,11 @@ model Payroll {
   actualPaid        Decimal   @map("actual_paid") @db.Decimal(18, 2)
   currency          Currency  @default(CNY)
   paidAt            DateTime? @map("paid_at") @db.Date
+  /// 이 급여가 만든 급여 지출 전표
   expenseId         BigInt?   @unique @map("expense_id")
+  /// 이 급여가 만든 사회보험 지출 전표.
+  /// 연결해 두지 않으면 급여를 다시 입력할 때 옛 사회보험 전표가 살아남아 두 번 잡힌다.
+  insuranceExpenseId BigInt?  @unique @map("insurance_expense_id")
   memo              String?
   createdBy         BigInt    @map("created_by")
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)

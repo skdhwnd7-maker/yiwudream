@@ -8,6 +8,7 @@ import { requirePermission, auditContext } from '@/lib/session-guard'
 import { logCreate, logUpdate, logAction, AuditReasonRequiredError } from '@/lib/audit'
 import { nextDocNo } from '@/lib/numbering'
 import { draftInvoice, recompute } from '@/lib/invoice-calc'
+import { allocateProportional } from '@/lib/allocate'
 import type { RoundingMode } from '@/lib/money'
 
 export type ActionState = { error?: string; ok?: string }
@@ -22,6 +23,50 @@ const dateOrNull = (v: FormDataEntryValue | null): Date | null => {
   if (!s) return null
   const d = new Date(`${s}T00:00:00`)
   return Number.isNaN(d.getTime()) ? null : d
+}
+
+/** 세금계산서 한 장에 묶으려면 세무 규칙이 같아야 하는 항목들 */
+type BillableOrder = {
+  orderNo: string
+  partnerId: bigint
+  accountingClass: string
+  partner: { name: string }
+  dealType: {
+    name: string
+    invoiceBase: string
+    vatMode: string
+    vatRate: Prisma.Decimal
+    rounding: string
+  }
+}
+
+/**
+ * 서로 다른 세무 규칙을 한 장에 묶으면 부가세 계산이 섞여 금액이 틀린다.
+ * 어느 주문이 어떻게 다른지 그대로 알려 준다 — 「묶을 수 없습니다」 만으로는 고칠 수가 없다.
+ */
+function findRuleMismatch(orders: BillableOrder[]): string | null {
+  if (orders.length <= 1) return null
+  const head = orders[0]
+
+  const rules: { label: string; of: (o: BillableOrder) => string }[] = [
+    { label: '거래처', of: (o) => o.partner.name },
+    { label: '발행 기준', of: (o) => o.dealType.invoiceBase },
+    { label: '부가세 방식', of: (o) => o.dealType.vatMode },
+    { label: '부가세율', of: (o) => o.dealType.vatRate.toString() },
+    { label: '끝자리 처리', of: (o) => o.dealType.rounding },
+    { label: '회계분류', of: (o) => o.accountingClass },
+  ]
+
+  for (const rule of rules) {
+    const base = rule.of(head)
+    const odd = orders.find((o) => rule.of(o) !== base)
+    if (odd) {
+      return `${rule.label}가 달라 한 장으로 묶을 수 없습니다 —`
+        + ` ${head.orderNo}는 「${base}」, ${odd.orderNo}는 「${rule.of(odd)}」 입니다.`
+        + ' 따로 발행하세요.'
+    }
+  }
+  return null
 }
 
 export async function createInvoice(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -44,10 +89,28 @@ export async function createInvoice(_prev: ActionState, formData: FormData): Pro
     where: { id: { in: orderIds } },
     include: { dealType: true, partner: true },
   })
-  const partnerIds = new Set(orders.map((o) => o.partnerId.toString()))
-  if (partnerIds.size > 1) {
-    return { error: '서로 다른 거래처의 주문은 한 장으로 묶을 수 없습니다.' }
+  if (orders.length !== orderIds.length) {
+    return { error: '선택한 주문 중 찾을 수 없는 것이 있습니다.' }
   }
+
+  const mismatch = findRuleMismatch(orders)
+  if (mismatch) return { error: mismatch }
+
+  // 이미 유효한 세금계산서에 들어간 주문은 다시 묶을 수 없다
+  const alreadyBilled = await prisma.invoiceOrder.findMany({
+    where: { orderId: { in: orderIds }, invoice: { isVoid: false, issueStatus: { not: InvoiceStatus.CANCELLED } } },
+    include: { invoice: { select: { invoiceNo: true, issueStatus: true } }, order: { select: { orderNo: true } } },
+  })
+  if (alreadyBilled.length > 0) {
+    const list = alreadyBilled
+      .map((x) => `${x.order.orderNo} → ${x.invoice.invoiceNo}`)
+      .join(', ')
+    return {
+      error: `이미 세금계산서에 들어간 주문입니다: ${list}.`
+        + ' 기존 계산서를 취소한 뒤 다시 묶으세요.',
+    }
+  }
+
   const dealType = orders[0].dealType
 
   // 담당자가 금액을 고쳤으면 사유를 받는다
@@ -96,9 +159,17 @@ export async function createInvoice(_prev: ActionState, formData: FormData): Pro
       })
       newId = inv.id.toString()
 
-      for (const o of orders) {
+      // 주문별 금액은 N등분이 아니라 각 주문의 실제 발행 대상금액 비율대로 나눈다.
+      // 균등분할하면 큰 주문과 작은 주문이 같은 금액으로 잡혀 주문별 매출이 틀어진다.
+      const weights = await Promise.all(orders.map(async (o) => {
+        const d = await draftInvoice([o.id])
+        return { item: o, weight: d?.targetAmount ?? new Prisma.Decimal(0) }
+      }))
+      const shares = allocateProportional(target, weights, 0)
+
+      for (const { item: o, amount } of shares) {
         await tx.invoiceOrder.create({
-          data: { invoiceId: inv.id, orderId: o.id, amount: target.div(orders.length).toDecimalPlaces(0) },
+          data: { invoiceId: inv.id, orderId: o.id, amount },
         })
         await tx.order.update({
           where: { id: o.id },
@@ -168,8 +239,27 @@ export async function cancelInvoice(_prev: ActionState, formData: FormData): Pro
       where: { id },
       data: { issueStatus: InvoiceStatus.CANCELLED, isVoid: true, updatedBy: BigInt(user.id) },
     })
+    // 주문에 다른 살아있는 계산서가 있으면 그 상태를 따라간다.
+    // 무조건 NONE 으로 되돌리면 아직 발행된 계산서가 있는데도 미발행으로 보인다.
     for (const io of inv.orders) {
-      await tx.order.update({ where: { id: io.orderId }, data: { invoiceStatus: InvoiceStatus.NONE } })
+      const other = await tx.invoiceOrder.findFirst({
+        where: {
+          orderId: io.orderId,
+          invoiceId: { not: id },
+          invoice: { isVoid: false, issueStatus: { not: InvoiceStatus.CANCELLED } },
+        },
+        include: { invoice: { select: { issueStatus: true, invoiceNo: true } } },
+        orderBy: { invoiceId: 'desc' },
+      })
+      const next = other ? other.invoice.issueStatus : InvoiceStatus.NONE
+      await tx.order.update({ where: { id: io.orderId }, data: { invoiceStatus: next } })
+      if (other) {
+        await logAction(tx, 'orders', io.orderId, AuditAction.UPDATE, ctx, {
+          field: 'invoiceStatus',
+          oldValue: inv.issueStatus,
+          newValue: `${next} — 다른 세금계산서 ${other.invoice.invoiceNo} 가 살아 있어 그 상태를 따릅니다`,
+        })
+      }
     }
     await logAction(tx, 'invoices', id, AuditAction.VOID, ctx, {
       field: 'issueStatus', oldValue: inv.issueStatus, newValue: 'CANCELLED',
