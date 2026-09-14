@@ -830,6 +830,10 @@ model ImportBatch {
   uploadedAt  DateTime     @default(now()) @map("uploaded_at") @db.Timestamptz(6)
   committedAt DateTime?    @map("committed_at") @db.Timestamptz(6)
   summary     Json?
+  /// 올린 엑셀 원본. 미리보기와 실행이 서로 다른 요청이라 한 번 더 읽어야 하고,
+  /// 나중에 "그때 뭘 올렸더라" 를 확인할 근거도 된다.
+  /// 디스크가 아니라 여기 두는 이유 — 서버를 새로 배포하면 디스크는 새것이 된다.
+  fileBytes   Bytes?       @map("file_bytes")
 
   rows ImportRow[]
 
