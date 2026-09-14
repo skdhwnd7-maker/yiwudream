@@ -39,6 +39,43 @@ const settlementCurrencyFor = (route: Route): Currency =>
 const entityFor = (route: Route): Entity =>
   route === Route.OVERSEAS ? Entity.CN : Entity.KR
 
+/**
+ * 고른 계좌와 루트·거래유형이 서로 맞는지 본다.
+ *
+ * 법인통장 거래를 중국 계좌에 꽂으면 잔액도 매출도 엉뚱한 곳에 잡힌다.
+ * 화면에서 걸러도 서버가 다시 확인해야 한다 — 화면은 우회할 수 있다.
+ */
+function checkRouteFit(
+  route: Route,
+  account: { name: string; route: Route | null; entity: Entity; currency: Currency },
+  dealType: { code: string; name: string; defaultRoute: Route | null },
+): string | null {
+  const ROUTE_LABEL: Record<Route, string> = {
+    OVERSEAS: '해외송금', BANK_GEN: '일반통장', BANK_CORP: '법인통장', SITE: '사이트 결제',
+    CASH: '현금', OTHER: '기타',
+  }
+
+  if (account.route !== null && account.route !== route) {
+    return `「${account.name}」 은 ${ROUTE_LABEL[account.route]} 계좌입니다.`
+      + ` ${ROUTE_LABEL[route]} 거래를 넣을 수 없습니다.`
+  }
+  const wantEntity = entityFor(route)
+  if (account.entity !== wantEntity) {
+    return `${ROUTE_LABEL[route]} 는 ${wantEntity === Entity.CN ? '중국' : '한국'} 계좌로 받아야 합니다.`
+      + ` 「${account.name}」 은 ${account.entity === Entity.CN ? '중국' : '한국'} 계좌입니다.`
+  }
+  const wantCurrency = settlementCurrencyFor(route)
+  if (route === Route.OVERSEAS && account.currency !== wantCurrency) {
+    return `해외송금은 ${wantCurrency} 계좌로 받아야 합니다.`
+      + ` 「${account.name}」 은 ${account.currency} 계좌입니다.`
+  }
+  if (dealType.defaultRoute !== null && dealType.defaultRoute !== route) {
+    return `거래유형 「${dealType.name}」 은 ${ROUTE_LABEL[dealType.defaultRoute]} 용입니다.`
+      + ` ${ROUTE_LABEL[route]} 로는 쓸 수 없습니다.`
+  }
+  return null
+}
+
 async function krwRounding(): Promise<RoundingMode> {
   const s = await prisma.setting.findUnique({ where: { key: 'krw_rounding' } })
   return (s?.value as RoundingMode) ?? 'FLOOR'
@@ -87,6 +124,9 @@ export async function createOrderWithReceipt(_prev: ActionState, formData: FormD
     krwRounding(),
   ])
   if (!dealType || !account || !partner) return { error: '기준정보를 찾을 수 없습니다.' }
+
+  const fit = checkRouteFit(route, account, dealType)
+  if (fit) return { error: fit }
 
   const currency = settlementCurrencyFor(route)
   const entity = entityFor(route)

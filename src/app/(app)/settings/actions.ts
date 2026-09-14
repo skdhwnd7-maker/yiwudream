@@ -16,6 +16,19 @@ const enumOr = <T extends Record<string, string>>(e: T, v: FormDataEntryValue | 
 
 // ── 계좌 ─────────────────────────────────────────────────────
 
+/** 이 계좌에 붙어 있는 거래 건수 */
+async function accountUsageCount(id: bigint): Promise<number> {
+  const [receipts, expenses, remitFrom, remitTo, transferFrom, transferTo] = await Promise.all([
+    prisma.receipt.count({ where: { accountId: id } }),
+    prisma.expense.count({ where: { accountId: id } }),
+    prisma.remittance.count({ where: { fromAccountId: id } }),
+    prisma.remittance.count({ where: { toAccountId: id } }),
+    prisma.internalTransfer.count({ where: { fromAccountId: id } }),
+    prisma.internalTransfer.count({ where: { toAccountId: id } }),
+  ])
+  return receipts + expenses + remitFrom + remitTo + transferFrom + transferTo
+}
+
 export async function saveAccount(_prev: ActionState, formData: FormData): Promise<ActionState> {
   const user = await requirePermission('settings.manage')
   const idRaw = String(formData.get('id') ?? '')
@@ -44,6 +57,25 @@ export async function saveAccount(_prev: ActionState, formData: FormData): Promi
       const id = BigInt(idRaw)
       const before = await prisma.account.findUnique({ where: { id } })
       if (!before) return { error: '계좌를 찾을 수 없습니다.' }
+
+      // 거래가 붙은 계좌의 성격을 바꾸면 과거 기록의 뜻이 달라진다.
+      // 원화 계좌를 위안 계좌로 바꾸면 지난 입금들이 갑자기 위안이 된다.
+      const used = await accountUsageCount(id)
+      if (used > 0) {
+        const locked: string[] = []
+        if (before.entity !== data.entity) locked.push('소속(한국/중국)')
+        if (before.route !== data.route) locked.push('루트')
+        if (before.currency !== data.currency) locked.push('통화')
+        if (locked.length > 0) {
+          return {
+            error: `이 계좌에는 이미 거래가 ${used.toLocaleString('ko-KR')}건 붙어 있어`
+              + ` ${locked.join('·')}를 바꿀 수 없습니다. 과거 기록의 뜻이 달라집니다.\n`
+              + '이 계좌를 비활성으로 돌리고 새 계좌를 만들어 쓰세요.'
+              + ' (이름·은행·계좌번호·기초잔액·메모는 바꿀 수 있습니다)',
+          }
+        }
+      }
+
       await prisma.$transaction(async (tx) => {
         await logUpdate(tx, 'accounts', id,
           { name: before.name, entity: before.entity, route: before.route, currency: before.currency,
@@ -162,6 +194,30 @@ export async function saveDealType(_prev: ActionState, formData: FormData): Prom
       const id = BigInt(idRaw)
       const before = await prisma.dealType.findUnique({ where: { id } })
       if (!before) return { error: '거래유형을 찾을 수 없습니다.' }
+
+      // 세무 규칙을 바꾸면 과거 주문의 부가세·발행대상금액이 소급해서 달라진다.
+      // 이미 신고한 달의 숫자가 조용히 바뀌면 안 된다.
+      const used = await prisma.order.count({ where: { dealTypeId: id, isVoid: false } })
+      if (used > 0) {
+        const locked: string[] = []
+        if (before.revenueBasis !== data.revenueBasis) locked.push('매출인식 기준')
+        if (before.invoiceBase !== data.invoiceBase) locked.push('세금계산서 발행 기준')
+        if (before.vatMode !== data.vatMode) locked.push('부가세 방식')
+        if (!before.vatRate.equals(data.vatRate)) locked.push('부가세율')
+        if (before.rounding !== data.rounding) locked.push('끝자리 처리')
+        if (before.accountingClass !== data.accountingClass) locked.push('회계분류')
+        if (locked.length > 0) {
+          return {
+            error: `이 거래유형으로 만든 주문이 ${used.toLocaleString('ko-KR')}건 있어`
+              + ` ${locked.join('·')}를 바꿀 수 없습니다.\n`
+              + '과거 주문의 부가세와 발행대상금액이 소급해서 달라집니다.\n'
+              + '규칙이 바뀌었다면 이 유형을 비활성으로 돌리고 새 유형을 만들어 쓰세요.'
+              + ' 과거 거래는 그때의 규칙으로 계속 계산됩니다.'
+              + ' (이름·기본 루트·정렬순서·메모·기본 발행여부는 바꿀 수 있습니다)',
+          }
+        }
+      }
+
       await prisma.$transaction(async (tx) => {
         await logUpdate(tx, 'deal_types', id,
           { code: before.code, name: before.name, revenueBasis: before.revenueBasis, invoiceBase: before.invoiceBase,
@@ -221,7 +277,19 @@ export async function saveUser(_prev: ActionState, formData: FormData): Promise<
           await auditContext(admin, '사용자 정보 변경'))
         await tx.user.update({
           where: { id },
-          data: { loginId, name, role, ...(password ? { passwordHash: await hashPassword(password) } : {}) },
+          data: {
+            loginId, name, role,
+            ...(password
+              ? {
+                  passwordHash: await hashPassword(password),
+                  // 비밀번호를 바꾸면 기존 로그인은 즉시 끊는다.
+                  // 안 그러면 바꾼 뒤에도 예전 세션으로 12시간 더 쓸 수 있다.
+                  sessionsValidFrom: new Date(),
+                  failedLoginCount: 0,
+                  lockedUntil: null,
+                }
+              : {}),
+          },
         })
         if (password) {
           await logUpdate(tx, 'users', id, { passwordHash: '(이전)' }, { passwordHash: '(변경됨)' }, await auditContext(admin, '비밀번호 재설정'))
@@ -259,7 +327,17 @@ export async function toggleUserActive(_prev: ActionState, formData: FormData): 
 
   await prisma.$transaction(async (tx) => {
     await logUpdate(tx, 'users', id, { isActive: target.isActive }, { isActive: !target.isActive }, await auditContext(admin, '계정 사용 여부 변경'))
-    await tx.user.update({ where: { id }, data: { isActive: !target.isActive } })
+    await tx.user.update({
+      where: { id },
+      data: {
+        isActive: !target.isActive,
+        // 정지하든 되살리든 기존 세션은 무효로 만든다.
+        // 정지했는데 열어 둔 창으로 계속 쓸 수 있으면 정지한 의미가 없다.
+        sessionsValidFrom: new Date(),
+        failedLoginCount: 0,
+        lockedUntil: null,
+      },
+    })
   })
   revalidate('/settings/users')
   return { ok: target.isActive ? '계정을 비활성화했습니다.' : '계정을 활성화했습니다.' }

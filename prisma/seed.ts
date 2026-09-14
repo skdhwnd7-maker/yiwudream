@@ -10,9 +10,42 @@ import { normalizeName } from '../src/lib/normalize'
 
 const prisma = new PrismaClient()
 
+/** 개발·검증용 기본 비밀번호. 운영에서는 절대 쓰지 않는다 */
+const DEV_ADMIN_PASSWORD = 'yiwudream1234'
+
+function resolveAdminPassword(): string {
+  const given = process.env.SEED_ADMIN_PASSWORD?.trim()
+  if (given) {
+    if (given.length < 8) {
+      throw new Error('SEED_ADMIN_PASSWORD 가 너무 짧습니다. 8자 이상으로 넣어 주세요.')
+    }
+    return given
+  }
+
+  // 운영으로 보이면 기본 비밀번호를 쓰지 않고 멈춘다
+  const isProduction = process.env.NODE_ENV === 'production'
+    || process.env.YD_ENV === 'production'
+  if (isProduction) {
+    throw new Error(
+      '운영 환경에서는 SEED_ADMIN_PASSWORD 없이 설치할 수 없습니다.\n'
+      + '  관리자 비밀번호를 정해 넣어 주세요. 8자 이상입니다.\n'
+      + '  예) SEED_ADMIN_PASSWORD="..." npm run db:seed',
+    )
+  }
+
+  console.warn(
+    '⚠ SEED_ADMIN_PASSWORD 가 없어 개발용 기본 비밀번호로 만듭니다.\n'
+    + '  운영에 올리기 전에 반드시 바꾸세요.',
+  )
+  return DEV_ADMIN_PASSWORD
+}
+
 async function main() {
   // ── 사용자 ──────────────────────────────────────────────
-  const adminPw = process.env.SEED_ADMIN_PASSWORD ?? 'yiwudream1234'
+  //
+  // 운영에서는 아는 비밀번호로 계정이 만들어지면 안 된다.
+  // SEED_ADMIN_PASSWORD 가 없으면 설치를 중단한다 — 「나중에 바꾸겠지」 는 안 바꾼다.
+  const adminPw = resolveAdminPassword()
   const admin = await prisma.user.upsert({
     where: { loginId: 'admin' },
     update: {},
@@ -23,7 +56,8 @@ async function main() {
       role: Role.OWNER,
     },
   })
-  console.log(`사용자: admin / ${adminPw}`)
+  // 비밀번호는 찍지 않는다. 터미널 기록과 로그에 그대로 남는다.
+  console.log('사용자: admin (비밀번호는 SEED_ADMIN_PASSWORD 로 넣은 값입니다)')
 
   const by = admin.id
 

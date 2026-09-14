@@ -541,6 +541,205 @@ async function main() {
     await prisma.partner.deleteMany({ where: { id: { in: [partner2.id, partner3.id] } } })
   }
 
+  // ════════════════════════════════════════════════════════════
+  console.log('\n━━ 10. 로그인·세션 보안 ━━')
+  {
+    const bcrypt = (await import('bcryptjs')).default
+    const { resolveTestDatabaseUrl } = await import('../src/lib/test-guard')
+    void resolveTestDatabaseUrl
+
+    const pw = 'audit-pass-1234'
+    const u = await prisma.user.create({
+      data: {
+        loginId: `audit${stamp}`, name: `감사사용자${stamp}`,
+        passwordHash: await bcrypt.hash(pw, 10), role: Role.STAFF,
+      },
+    })
+
+    // 토큰을 직접 만들어 세션 판정만 본다 (쿠키 없이)
+    const { SignJWT } = await import('jose')
+    const secret = new TextEncoder().encode(process.env.AUTH_SECRET!)
+    const makeToken = async (payload: Record<string, unknown>, iat?: number) => {
+      let b = new SignJWT(payload).setProtectedHeader({ alg: 'HS256' })
+      b = iat !== undefined ? b.setIssuedAt(iat) : b.setIssuedAt()
+      return b.setExpirationTime('12h').sign(secret)
+    }
+
+    const { jwtVerify } = await import('jose')
+    // getSession 은 쿠키를 읽으므로, 여기서는 같은 판정 규칙을 직접 확인한다
+    async function judge(token: string): Promise<{ ok: boolean; role?: Role; why?: string }> {
+      const { payload } = await jwtVerify(token, secret)
+      const row = await prisma.user.findUnique({
+        where: { id: BigInt(String(payload.id)) },
+        select: { isActive: true, role: true, sessionsValidFrom: true },
+      })
+      if (!row) return { ok: false, why: '없는 사용자' }
+      if (!row.isActive) return { ok: false, why: '정지된 계정' }
+      const iat = payload.iat as number
+      if (iat + 1 < Math.floor(row.sessionsValidFrom.getTime() / 1000)) {
+        return { ok: false, why: '무효화된 세션' }
+      }
+      return { ok: true, role: row.role }
+    }
+
+    const token = await makeToken({ id: u.id.toString(), loginId: u.loginId, name: u.name, role: Role.STAFF })
+    check('정상 세션은 통과', (await judge(token)).ok, true)
+
+    // 권한을 올려도 토큰이 아니라 DB 를 따른다
+    await prisma.user.update({ where: { id: u.id }, data: { role: Role.MANAGER } })
+    check('권한은 DB 가 진실이다', (await judge(token)).role, 'MANAGER')
+    await prisma.user.update({ where: { id: u.id }, data: { role: Role.STAFF } })
+
+    // 계정 정지 → 기존 토큰 즉시 무효
+    await prisma.user.update({ where: { id: u.id }, data: { isActive: false } })
+    check('정지하면 기존 세션이 끊긴다', (await judge(token)).why, '정지된 계정')
+    await prisma.user.update({ where: { id: u.id }, data: { isActive: true } })
+
+    // 비밀번호 변경 → 그 이전 토큰 무효
+    const oldToken = await makeToken(
+      { id: u.id.toString(), loginId: u.loginId, name: u.name, role: Role.STAFF },
+      Math.floor(Date.now() / 1000) - 3600,
+    )
+    await prisma.user.update({
+      where: { id: u.id },
+      data: { passwordHash: await bcrypt.hash('new-pass-5678', 10), sessionsValidFrom: new Date() },
+    })
+    check('비밀번호를 바꾸면 이전 세션이 끊긴다', (await judge(oldToken)).why, '무효화된 세션')
+    const freshToken = await makeToken({ id: u.id.toString(), loginId: u.loginId, name: u.name, role: Role.STAFF })
+    check('바꾼 뒤 새 세션은 통과', (await judge(freshToken)).ok, true)
+
+    // 로그인 실패 제한
+    const { loginAction } = await import('../src/app/login/actions')
+    await prisma.user.update({
+      where: { id: u.id }, data: { failedLoginCount: 0, lockedUntil: null },
+    })
+    let lastError = ''
+    for (let i = 0; i < 5; i++) {
+      const r = await runAsUser(owner, () => call(
+        () => loginAction({}, fd({ loginId: u.loginId, password: '틀린비번' })),
+      )) as { error?: string }
+      lastError = r.error ?? ''
+    }
+    checkLike('5번 틀리면 계정이 잠긴다', lastError, '잠갔습니다')
+    const locked = await prisma.user.findUniqueOrThrow({ where: { id: u.id } })
+    check('잠금 시각이 기록된다', locked.lockedUntil !== null, true)
+
+    // 잠긴 동안은 맞는 비밀번호도 받지 않는다
+    const blocked = await runAsUser(owner, () => call(() => loginAction({}, fd({
+      loginId: u.loginId, password: 'new-pass-5678',
+    })))) as { error?: string }
+    checkLike('잠긴 동안은 맞는 비밀번호도 막힌다', blocked.error, '계정이 잠겼습니다')
+
+    // 잠금을 풀면 로그인된다
+    await prisma.user.update({ where: { id: u.id }, data: { lockedUntil: null, failedLoginCount: 0 } })
+    const good = await runAsUser(owner, () => call(() => loginAction({}, fd({
+      loginId: u.loginId, password: 'new-pass-5678',
+    })))) as { error?: string; redirected?: true }
+    check('잠금이 풀리면 로그인된다', 'redirected' in good ? 'ok' : (good.error ?? '?'), 'ok')
+    const after = await prisma.user.findUniqueOrThrow({ where: { id: u.id } })
+    check('성공하면 실패 횟수가 초기화된다', after.failedLoginCount, 0)
+
+    // 없는 아이디는 잠금 대상이 아니다 (아이디 존재 여부를 흘리지 않는다)
+    const nobody = await runAsUser(owner, () => call(() => loginAction({}, fd({
+      loginId: `없는아이디${stamp}`, password: 'x',
+    })))) as { error?: string }
+    check('없는 아이디는 같은 메시지', nobody.error, '아이디 또는 비밀번호가 올바르지 않습니다.')
+
+    // 변경이력은 지울 수 없다 — 그게 설계다. 검증 계정은 정지만 시켜 둔다
+    await prisma.user.update({
+      where: { id: u.id },
+      data: { isActive: false, name: `${u.name} (검증 후 정지)` },
+    })
+  }
+
+  // ════════════════════════════════════════════════════════════
+  console.log('\n━━ 11. 기준정보 변경 보호 ━━')
+  {
+    const { saveAccount, saveDealType } = await import('../src/app/(app)/settings/actions')
+    const { createOrderWithReceipt } = await import('../src/app/(app)/orders/actions')
+
+    // 거래가 붙은 계좌의 성격은 못 바꾼다
+    const acc = await prisma.account.findFirstOrThrow({ where: { route: Route.BANK_CORP } })
+    // 앞 절에서 이 계좌로 송금을 냈으므로 이미 거래가 붙어 있다
+    const used = await prisma.receipt.count({ where: { accountId: acc.id } })
+      + await prisma.remittance.count({ where: { fromAccountId: acc.id } })
+    check('법인통장에 거래가 붙어 있다', used > 0, true)
+
+    const changeCurrency = await runAsUser(owner, () => call(() => saveAccount({}, fd({
+      id: acc.id.toString(), name: acc.name,
+      entity: acc.entity, route: acc.route ?? Route.BANK_CORP, currency: Currency.CNY,
+      openingBalance: acc.openingBalance.toString(), reason: '검증',
+    })))) as { error?: string }
+    checkLike('쓰던 계좌의 통화는 못 바꾼다', changeCurrency.error, '통화를 바꿀 수 없습니다')
+
+    const changeRoute = await runAsUser(owner, () => call(() => saveAccount({}, fd({
+      id: acc.id.toString(), name: acc.name,
+      entity: acc.entity, route: Route.BANK_GEN, currency: acc.currency,
+      openingBalance: acc.openingBalance.toString(), reason: '검증',
+    })))) as { error?: string }
+    checkLike('쓰던 계좌의 루트도 못 바꾼다', changeRoute.error, '루트를 바꿀 수 없습니다')
+
+    // 이름은 바꿀 수 있어야 한다
+    const rename = await runAsUser(owner, () => call(() => saveAccount({}, fd({
+      id: acc.id.toString(), name: `${acc.name} `,
+      entity: acc.entity, route: acc.route ?? Route.BANK_CORP, currency: acc.currency,
+      openingBalance: acc.openingBalance.toString(), reason: '검증',
+    })))) as { error?: string; ok?: string }
+    check('이름은 바꿀 수 있다', rename.error ?? 'ok', 'ok')
+
+    // 쓰고 있는 거래유형의 세무 규칙은 못 바꾼다
+    const dt = await prisma.dealType.findFirstOrThrow({ where: { code: 'CORP_FULL' } })
+    const guardOrder = await prisma.order.create({
+      data: {
+        orderNo: `AM${stamp}`, partnerId: partner.id, route: Route.BANK_CORP,
+        dealTypeId: dt.id, accountingClass: '상품매출', entity: Entity.KR,
+        settlementCurrency: Currency.KRW, orderDate: new Date(),
+        invoiceStatus: InvoiceStatus.NONE, createdBy: admin.id,
+      },
+    })
+    const dtUsed = await prisma.order.count({ where: { dealTypeId: dt.id, isVoid: false } })
+    check('이 거래유형으로 만든 주문이 있다', dtUsed > 0, true)
+
+    const changeVat = await runAsUser(owner, () => call(() => saveDealType({}, fd({
+      id: dt.id.toString(), code: dt.code, name: dt.name,
+      revenueBasis: dt.revenueBasis, invoiceBase: dt.invoiceBase,
+      vatMode: dt.vatMode, vatRate: '0.15', rounding: dt.rounding,
+      accountingClass: dt.accountingClass, reason: '검증',
+    })))) as { error?: string }
+    checkLike('쓰던 거래유형의 부가세율은 못 바꾼다', changeVat.error, '부가세율를 바꿀 수 없습니다')
+    checkLike('왜 안 되는지 알려 준다', changeVat.error, '소급해서 달라집니다')
+
+    const changeName = await runAsUser(owner, () => call(() => saveDealType({}, fd({
+      id: dt.id.toString(), code: dt.code, name: dt.name,
+      revenueBasis: dt.revenueBasis, invoiceBase: dt.invoiceBase,
+      vatMode: dt.vatMode, vatRate: dt.vatRate.toString(), rounding: dt.rounding,
+      accountingClass: dt.accountingClass, sortOrder: '5', reason: '검증',
+    })))) as { error?: string; ok?: string }
+    check('정렬순서는 바꿀 수 있다', changeName.error ?? 'ok', 'ok')
+
+    // 루트와 계좌가 안 맞으면 주문을 못 만든다
+    const accCny = await prisma.account.findFirstOrThrow({ where: { route: Route.OVERSEAS } })
+    const dtCorp = await prisma.dealType.findFirstOrThrow({ where: { code: 'CORP_FULL' } })
+    const wrongAccount = await runAsUser(owner, () => call(() => createOrderWithReceipt({}, fd({
+      partnerId: partner.id.toString(), route: Route.BANK_CORP,
+      dealTypeId: dtCorp.id.toString(), accountId: accCny.id.toString(),
+      orderDate: new Date().toISOString().slice(0, 10), amount: '1000000',
+    })))) as { error?: string }
+    checkLike('법인통장 거래를 중국 계좌에 넣을 수 없다', wrongAccount.error, '계좌입니다')
+
+    // 반대로 올바른 조합은 통과해야 한다 (지나치게 막으면 그것도 버그다)
+    const accCorp2 = await prisma.account.findFirstOrThrow({ where: { route: Route.BANK_CORP } })
+    const rightAccount = await runAsUser(owner, () => call(() => createOrderWithReceipt({}, fd({
+      partnerId: partner.id.toString(), route: Route.BANK_CORP,
+      dealTypeId: dtCorp.id.toString(), accountId: accCorp2.id.toString(),
+      orderDate: new Date().toISOString().slice(0, 10), amount: '1100000',
+    })))) as { error?: string; redirected?: true }
+    check('맞는 조합은 통과한다',
+      'redirected' in rightAccount ? 'ok' : (rightAccount.error ?? '?'), 'ok')
+
+    await prisma.order.delete({ where: { id: guardOrder.id } })
+  }
+
   // ── 정리
   const orders = await prisma.order.findMany({ where: { partnerId: partner.id }, select: { id: true } })
   const orderIds = orders.map((o) => o.id)
