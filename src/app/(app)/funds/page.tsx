@@ -155,7 +155,7 @@ export default async function FundsPage({
                   <td className="pl-4 text-sm text-ink-muted">└ 중국 송금대기금</td>
                   <td className="n text-sm text-clay">{fmtKrw(f.remitPending)}</td>
                   <td className="pl-3">
-                    {f.remitPending.gt(0) && <Link href="/remittances" className="text-[11px] no-underline hover:underline">송금하기 →</Link>}
+                    <Link href="/remittances" className="text-[11px] no-underline hover:underline">송금하기 →</Link>
                   </td>
                 </tr>
                 <tr>
@@ -170,6 +170,16 @@ export default async function FundsPage({
                 </tr>
               </tbody>
             </table>
+          </div>
+          {/* 왼쪽 메뉴에 없는 화면들이라 여기서 들어간다 */}
+          <div className="border-t border-line px-5 py-3 text-[12px]">
+            <Link href="/remittances" className="no-underline hover:underline">✈️ 중국 송금</Link>
+            <span className="mx-2 text-ink-muted">·</span>
+            <Link href="/transfers" className="no-underline hover:underline">🔁 내부 자금이동</Link>
+            <span className="mx-2 text-ink-muted">·</span>
+            <Link href="/invoices" className="no-underline hover:underline">🧾 세금계산서</Link>
+            <span className="mx-2 text-ink-muted">·</span>
+            <Link href="/invoices/vat" className="no-underline hover:underline">🏛️ 부가세 신고</Link>
           </div>
         </div>
       </section>

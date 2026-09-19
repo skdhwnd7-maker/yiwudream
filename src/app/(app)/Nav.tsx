@@ -33,15 +33,6 @@ const GROUPS: Group[] = [
     ],
   },
   {
-    title: '자금',
-    items: [
-      { href: '/remittances', label: '중국 송금', icon: '✈️', perm: 'remittance.execute' },
-      { href: '/transfers', label: '내부 자금이동', icon: '🔁', perm: 'profit.view' },
-      { href: '/invoices', label: '세금계산서', icon: '🧾', perm: 'invoice.confirm' },
-      { href: '/invoices/vat', label: '부가세 신고', icon: '🏛️', perm: 'invoice.confirm' },
-    ],
-  },
-  {
     title: '중국 운영비',
     items: [
       { href: '/payroll', label: '직원 급여', icon: '🇨🇳', perm: 'payroll.view' },
