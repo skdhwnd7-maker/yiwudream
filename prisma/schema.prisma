@@ -325,6 +325,20 @@ model DealType {
   @@map("deal_types")
 }
 
+/// 로그인 실패 기록 — 무차별 대입을 막는다.
+/// 계정 하나를 통째로 잠그면 바깥에서 아무나 대표님 계정을 잠글 수 있다.
+/// 그래서 「어디서(IP) 누구를(계정)」 단위로 센다.
+model LoginAttempt {
+  /// "ip:1.2.3.4" 또는 "id:admin@1.2.3.4"
+  key          String    @id @db.VarChar(160)
+  count        Int       @default(0)
+  firstAt      DateTime  @default(now()) @map("first_at") @db.Timestamptz(6)
+  blockedUntil DateTime? @map("blocked_until") @db.Timestamptz(6)
+
+  @@index([blockedUntil])
+  @@map("login_attempts")
+}
+
 model Setting {
   key         String  @id @db.VarChar(50)
   value       String

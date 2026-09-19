@@ -140,30 +140,41 @@ export async function payVatPeriod(_prev: ActionState, formData: FormData): Prom
     return { error: '신고 확정한 기간만 납부 처리할 수 있습니다.' }
   }
   if (!paidAt) return { error: '납부일을 입력하세요.' }
-  if (paidAmount.isZero()) return { error: '납부액을 입력하세요. 환급이면 음수로 넣으세요.' }
+  if (!paidAmount || paidAmount.isZero()) {
+    return { error: '납부액을 입력하세요. 환급이면 음수로 넣으세요.' }
+  }
+  // 납부든 환급이든 돈이 실제로 오간 통장을 알아야 잔액이 맞는다
+  if (!accountIdRaw) return { error: '돈이 오간 계좌를 고르세요.' }
+  const account = await prisma.account.findUnique({ where: { id: BigInt(accountIdRaw) } })
+  if (!account) return { error: '계좌를 찾을 수 없습니다.' }
+  if (account.entity !== Entity.KR || account.currency !== Currency.KRW) {
+    return { error: '부가세는 한국법인 원화 계좌로만 주고받습니다.' }
+  }
 
   try {
     await prisma.$transaction(async (tx) => {
       const ctx = await auditContext(user, '부가세 납부')
       let expenseId: bigint | null = null
 
-      // 납부는 회사 돈이 실제로 나가는 일이다. 지출 전표로 남긴다
-      if (paidAmount.gt(0)) {
-        const cat = await tx.expenseCategory.findFirst({ where: { code: 'VAT_PAYMENT' } })
-        if (cat) {
-          const e = await tx.expense.create({
-            data: {
-              expenseNo: await nextDocNo(tx, 'EX', paidAt),
-              entity: Entity.KR, expenseDate: paidAt, categoryId: cat.id,
-              accountId: accountIdRaw ? BigInt(accountIdRaw) : null,
-              currency: Currency.KRW, amount: paidAmount, amountKrw: paidAmount,
-              paymentStatus: PaymentStatus.PAID, paidAt,
-              memo: `${p.label} 부가세 납부`, createdBy: BigInt(user.id),
-            },
-          })
-          expenseId = e.id
-        }
-      }
+      // 납부(양수)는 통장에서 나가고, 환급(음수)은 통장으로 들어온다.
+      // 둘 다 같은 전표로 남긴다 — 금액 부호가 방향이다.
+      // 환급을 전표 없이 두면 실제로 받은 돈이 통장잔액에 영영 안 잡힌다.
+      const cat = await tx.expenseCategory.findFirst({ where: { code: 'VAT_PAYMENT' } })
+      if (!cat) throw new Error('부가세 납부 비용분류(VAT_PAYMENT)가 없습니다.')
+      const e = await tx.expense.create({
+        data: {
+          expenseNo: await nextDocNo(tx, 'EX', paidAt),
+          entity: Entity.KR, expenseDate: paidAt, categoryId: cat.id,
+          accountId: account.id,
+          currency: Currency.KRW, amount: paidAmount, amountKrw: paidAmount,
+          paymentStatus: PaymentStatus.PAID, paidAt,
+          memo: paidAmount.gt(0)
+            ? `${p.label} 부가세 납부`
+            : `${p.label} 부가세 환급 수령`,
+          createdBy: BigInt(user.id),
+        },
+      })
+      expenseId = e.id
 
       await tx.vatPeriod.update({
         where: { id },

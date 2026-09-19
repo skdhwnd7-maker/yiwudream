@@ -608,11 +608,15 @@ async function main() {
     const freshToken = await makeToken({ id: u.id.toString(), loginId: u.loginId, name: u.name, role: Role.STAFF })
     check('바꾼 뒤 새 세션은 통과', (await judge(freshToken)).ok, true)
 
-    // 로그인 실패 제한
+    // 로그인 실패 제한 — 2차 감사에서 방식을 바꿨다.
+    // 예전: 계정을 5번 틀리면 그 계정을 통째로 15분 잠근다.
+    //       → 인터넷에 열어 두면 누구나 대표님 계정을 반복해서 잠글 수 있다.
+    // 지금: 「어디서(IP) 누구를(계정)」 단위로 센다. 한 IP 가 막혀도
+    //       대표님은 다른 곳에서 들어오실 수 있고, 아이디 존재 여부도 새지 않는다.
     const { loginAction } = await import('../src/app/login/actions')
-    await prisma.user.update({
-      where: { id: u.id }, data: { failedLoginCount: 0, lockedUntil: null },
-    })
+    const { checkThrottle, clearFailures } = await import('../src/lib/login-throttle')
+    await clearFailures(u.loginId)
+
     let lastError = ''
     for (let i = 0; i < 5; i++) {
       const r = await runAsUser(owner, () => call(
@@ -620,30 +624,33 @@ async function main() {
       )) as { error?: string }
       lastError = r.error ?? ''
     }
-    checkLike('5번 틀리면 계정이 잠긴다', lastError, '잠갔습니다')
-    const locked = await prisma.user.findUniqueOrThrow({ where: { id: u.id } })
-    check('잠금 시각이 기록된다', locked.lockedUntil !== null, true)
+    check('5번 틀려도 문구는 늘 같다', lastError, '아이디 또는 비밀번호가 올바르지 않습니다.')
+    checkLike('몇 번 남았는지 알려주지 않는다', lastError.includes('번 더') ? '' : 'ok', 'ok')
 
-    // 잠긴 동안은 맞는 비밀번호도 받지 않는다
+    const gate = await checkThrottle(u.loginId)
+    check('5번 틀리면 그 열쇠가 막힌다', gate.blocked, true)
+
+    const still = await prisma.user.findUniqueOrThrow({ where: { id: u.id } })
+    check('계정 자체는 잠기지 않는다 (바깥에서 잠글 수 없다)', still.lockedUntil === null, true)
+
     const blocked = await runAsUser(owner, () => call(() => loginAction({}, fd({
       loginId: u.loginId, password: 'new-pass-5678',
     })))) as { error?: string }
-    checkLike('잠긴 동안은 맞는 비밀번호도 막힌다', blocked.error, '계정이 잠겼습니다')
+    checkLike('막힌 동안은 맞는 비밀번호도 받지 않는다', blocked.error, '너무 잦습니다')
 
-    // 잠금을 풀면 로그인된다
-    await prisma.user.update({ where: { id: u.id }, data: { lockedUntil: null, failedLoginCount: 0 } })
+    await clearFailures(u.loginId)
     const good = await runAsUser(owner, () => call(() => loginAction({}, fd({
       loginId: u.loginId, password: 'new-pass-5678',
     })))) as { error?: string; redirected?: true }
-    check('잠금이 풀리면 로그인된다', 'redirected' in good ? 'ok' : (good.error ?? '?'), 'ok')
-    const after = await prisma.user.findUniqueOrThrow({ where: { id: u.id } })
-    check('성공하면 실패 횟수가 초기화된다', after.failedLoginCount, 0)
+    check('제한이 풀리면 로그인된다', 'redirected' in good ? 'ok' : (good.error ?? '?'), 'ok')
+    check('성공하면 실패 기록이 사라진다', (await checkThrottle(u.loginId)).blocked, false)
 
-    // 없는 아이디는 잠금 대상이 아니다 (아이디 존재 여부를 흘리지 않는다)
+    // 없는 아이디도 같은 답 — 아이디 존재 여부를 흘리지 않는다
     const nobody = await runAsUser(owner, () => call(() => loginAction({}, fd({
       loginId: `없는아이디${stamp}`, password: 'x',
     })))) as { error?: string }
     check('없는 아이디는 같은 메시지', nobody.error, '아이디 또는 비밀번호가 올바르지 않습니다.')
+    await prisma.loginAttempt.deleteMany({ where: { key: { contains: u.loginId } } })
 
     // 변경이력은 지울 수 없다 — 그게 설계다. 검증 계정은 정지만 시켜 둔다
     await prisma.user.update({

@@ -236,6 +236,10 @@ async function aggregateByPeriod(from: Date, to: Date, fx: Prisma.Decimal | null
       continue
     }
 
+    // 부가세 납부는 국세청에 예수금을 넘겨주는 일이다.
+    // 통장에서는 빠지지만 회사가 쓴 돈이 아니라 영업손익에 넣지 않는다.
+    if (e.category.code === 'VAT_PAYMENT') continue
+
     // 주문에 안 붙은 지출 — 회사 운영비
     switch (e.category.code) {
       case 'SALARY': opSalary = opSalary.plus(amountKrw); break

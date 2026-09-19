@@ -264,6 +264,18 @@ export async function sendRemittance(_prev: ActionState, formData: FormData): Pr
   try {
     await prisma.$transaction(async (tx) => {
       const ctx = await auditContext(user, '송금 실행')
+
+      // 버튼을 두 번 눌러도 예치금이 두 번 빠지면 안 된다.
+      // 상태 확인을 트랜잭션 밖에서 했으니 여기서 「DRAFT 일 때만」 조건부로 바꾼다.
+      // 먼저 들어온 요청만 1건을 바꾸고, 뒤따라온 요청은 0건이라 여기서 멈춘다.
+      const claimed = await tx.remittance.updateMany({
+        where: { id, status: RemitStatus.DRAFT, isVoid: false },
+        data: { status: RemitStatus.SENT, updatedBy: BigInt(user.id) },
+      })
+      if (claimed.count === 0) {
+        throw new Error('이미 처리된 송금입니다. 화면을 새로 고쳐 확인해 주세요.')
+      }
+
       await consumeDeposits(
         tx,
         { id: remit.id, remitNo: remit.remitNo, remitDate: remit.remitDate },
@@ -290,9 +302,8 @@ export async function sendRemittance(_prev: ActionState, formData: FormData): Pr
         }
       }
 
-      await tx.remittance.update({
-        where: { id }, data: { status: RemitStatus.SENT, updatedBy: BigInt(user.id) },
-      })
+      // 상태는 위에서 조건부로 이미 바꿨다
+
       await logAction(tx, 'remittances', id, AuditAction.UPDATE, ctx, {
         field: 'status', oldValue: remit.status, newValue: 'SENT',
       })
@@ -453,8 +464,30 @@ export async function createInternalTransfer(_prev: ActionState, formData: FormD
   const memo = String(formData.get('memo') ?? '').trim() || null
 
   if (!transferDate) return { error: '일자를 입력하세요.' }
-  if (!usdAmount && !krwAmount) return { error: 'USD 또는 KRW 금액 중 하나는 입력해야 합니다.' }
   if (!cnyArrival || cnyArrival.lte(0)) return { error: 'CNY 도착금액을 입력하세요.' }
+
+  // 어느 통장에서 나가 어느 통장으로 들어갔는지 서버에서 확인한다.
+  // 화면만 믿으면 한국 통장에서 돈이 나가지 않았는데 중국 통장만 불어나는
+  // 전표를 만들 수 있다. 그러면 자금현황이 실제보다 많아진다.
+  const fromAccount = fromAccountIdRaw
+    ? await prisma.account.findUnique({ where: { id: BigInt(fromAccountIdRaw) } })
+    : null
+  const toAccount = toAccountIdRaw
+    ? await prisma.account.findUnique({ where: { id: BigInt(toAccountIdRaw) } })
+    : null
+
+  if (!fromAccount) return { error: '보낸 계좌를 고르세요.' }
+  if (!toAccount) return { error: '받은 계좌를 고르세요.' }
+  if (fromAccount.entity !== Entity.KR) return { error: '보낸 계좌는 한국법인 계좌여야 합니다.' }
+  if (toAccount.entity !== Entity.CN) return { error: '받은 계좌는 중국법인 계좌여야 합니다.' }
+  if (toAccount.currency !== Currency.CNY) return { error: '받은 계좌는 위안(CNY) 계좌여야 합니다.' }
+  if (fromAccount.currency === Currency.KRW && (!krwAmount || krwAmount.lte(0))) {
+    return {
+      error: `${fromAccount.name} 은 원화 계좌입니다. 통장에서 실제로 나간 원화 금액을 넣으세요.`
+        + ' 넣지 않으면 한국 통장은 그대로인데 중국 통장만 늘어납니다.',
+    }
+  }
+  if (bankFee.lt(0)) return { error: '송금수수료는 음수일 수 없습니다.' }
 
   const fxUsdCny = usdAmount && usdAmount.gt(0)
     ? cnyArrival.div(usdAmount).toDecimalPlaces(6)
@@ -467,12 +500,30 @@ export async function createInternalTransfer(_prev: ActionState, formData: FormD
       const t = await tx.internalTransfer.create({
         data: {
           transferNo, transferDate, fromEntity: Entity.KR, toEntity: Entity.CN,
-          fromAccountId: fromAccountIdRaw ? BigInt(fromAccountIdRaw) : null,
-          toAccountId: toAccountIdRaw ? BigInt(toAccountIdRaw) : null,
+          fromAccountId: fromAccount.id,
+          toAccountId: toAccount.id,
           krwAmount, usdAmount, cnyArrivalAmount: cnyArrival,
           fxRateUsdCny: fxUsdCny, bankFee, purpose, memo, createdBy: BigInt(user.id),
         },
       })
+
+      // 송금수수료는 회사가 실제로 쓴 돈이다. 지출 전표로 남겨야
+      // 통장에서도 빠지고 손익에도 잡힌다. 전표 없이 두면 손익에서 사라진다.
+      if (bankFee.gt(0)) {
+        const cat = await tx.expenseCategory.findFirst({ where: { code: 'BANK_FEE' } })
+        if (!cat) throw new Error('송금·은행 수수료 비용분류(BANK_FEE)가 없습니다.')
+        await tx.expense.create({
+          data: {
+            expenseNo: await nextDocNo(tx, 'EX', transferDate),
+            entity: Entity.KR, expenseDate: transferDate, categoryId: cat.id,
+            accountId: fromAccount.id, currency: Currency.KRW,
+            amount: bankFee, amountKrw: roundKrw(bankFee, 'FLOOR'),
+            paymentStatus: PaymentStatus.PAID, paidAt: transferDate,
+            memo: `${transferNo} 내부 자금이동 송금수수료`, createdBy: BigInt(user.id),
+          },
+        })
+      }
+
       await logCreate(tx, 'internal_transfers', t.id, {
         transferNo, usdAmount: usdAmount?.toString() ?? null,
         cnyArrival: cnyArrival.toString(), fxUsdCny: fxUsdCny?.toString() ?? null, purpose,

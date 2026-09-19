@@ -109,7 +109,11 @@
 
 1. 프로그램 상자 → **Variables**
 2. `SEED_DEMO` 값을 **`0`** 으로 바꿉니다 (시연 자료를 다시 넣지 않게)
-3. **`+ New Variable`** 로 **`RESET_DATA`** = **`1`** 을 넣습니다
+3. **`+ New Variable`** 로 **두 개**를 넣습니다
+   - `RESET_DATA` = `1`
+   - `RESET_DATA_CONFIRM` = `DELETE-ALL-LEDGER-DATA`
+
+   > 둘 다 있어야 실행됩니다. 하나만 넣으면 아무 일도 일어나지 않습니다.
 4. **Deploy** 를 누릅니다
 5. 기록에 이게 나오면 다 지워진 것입니다
 
@@ -120,7 +124,7 @@
         ⚠ Railway 의 RESET_DATA 값을 지워 주세요.
 ```
 
-6. **`RESET_DATA`** 를 지웁니다 (⋮ → Delete). 다음 배포부터 깔끔합니다.
+6. **`RESET_DATA`** 와 **`RESET_DATA_CONFIRM`** 을 지웁니다 (⋮ → Delete).
 
 > **깜빡하고 안 지우셔도 자료는 날아가지 않습니다.**
 > 같은 값으로는 딱 한 번만 지웁니다. 두 번째부터는

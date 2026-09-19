@@ -78,11 +78,11 @@ export function PeriodActions({
           defaultValue={todayISO()} />
         <input name="paidAmount" inputMode="decimal" required className="num text-xs"
           defaultValue={netPayable} placeholder="납부액" />
-        <select name="accountId" className="text-xs">
-          <option value="">출금 계좌 선택 안 함</option>
+        <select name="accountId" required className="text-xs" defaultValue="">
+          <option value="" disabled>돈이 오간 계좌 (필수)</option>
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
-        <p className="hint">환급이면 음수로 넣으세요.</p>
+        <p className="hint">환급이면 음수로 넣으세요. 그 계좌로 들어온 것으로 잡힙니다.</p>
         <div className="flex gap-1.5">
           <SubmitButton className="btn-primary btn-sm" pendingLabel="…">납부 처리</SubmitButton>
           <button type="button" className="btn-ghost btn-sm" onClick={() => setMode('none')}>닫기</button>

@@ -8,6 +8,7 @@ import {
   AuditAction, FxSource,
 } from '@prisma/client'
 import { prisma } from '@/lib/db'
+import { SPLIT_KIND_LABEL } from '@/lib/labels'
 import { requireUser, requirePermission, auditContext } from '@/lib/session-guard'
 import { logCreate, logUpdate, logAction, AuditReasonRequiredError } from '@/lib/audit'
 import { nextDocNo } from '@/lib/numbering'
@@ -672,14 +673,60 @@ export async function updateReceiptAmount(_prev: ActionState, formData: FormData
     return { error: '정산완료된 주문입니다. 잠금해제 후 진행하세요.' }
   }
 
+  // 예치금이 얽힌 입금은 금액만 고칠 수 없다.
+  // 예치금 원장은 이 입금과 따로 쌓여 있어서, 여기서 금액만 바꾸면
+  // 입금 분해 합계·예치금 잔액·중국 송금대기금이 서로 어긋난다.
+  // 취소하고 다시 등록하면 원장까지 한 번에 되돌아간다.
+  if (receipt.source === ReceiptSource.FROM_DEPOSIT) {
+    return {
+      error: '예치금에서 충당한 입금입니다. 금액을 고치려면 이 입금을 취소하고 다시 등록하세요.',
+    }
+  }
+  const depositKinds: SplitKind[] = [SplitKind.DEPOSIT_GOODS, SplitKind.DEPOSIT_GENERAL]
+  if (receipt.splits.some((s) => depositKinds.includes(s.splitKind))) {
+    return {
+      error: '예치금이 들어 있는 입금입니다. 금액을 고치려면 이 입금을 취소하고 다시 등록하세요.'
+        + ' 그래야 예치금 잔액과 중국 송금대기금이 함께 맞춰집니다.',
+    }
+  }
+  if (receipt.orderId) {
+    const ledgerCount = await prisma.depositLedger.count({ where: { orderId: receipt.orderId } })
+    if (ledgerCount > 0) {
+      return {
+        error: '이 주문에 예치금 원장이 걸려 있습니다. 입금을 취소하고 다시 등록하세요.',
+      }
+    }
+  }
+
   const rounding = await krwRounding()
   const toKrw = (v: Prisma.Decimal) =>
     receipt.account.currency === Currency.KRW ? roundKrw(v, rounding) : cnyToKrw(v, fxRate ?? receipt.fxRate ?? 1, rounding)
   const toCny = (v: Prisma.Decimal) =>
     receipt.account.currency === Currency.CNY ? round2(v) : krwToCny(v, fxRate ?? receipt.fxRate ?? 1)
 
-  // 금액이 바뀌면 분해도 같은 비율로 다시 만든다
-  const ratio = amount.div(receipt.amount)
+  // 분해를 같은 비율로 늘리고 줄이면 안 된다.
+  // 총입금액이 바뀌었다고 상품대금·수수료·부가세가 같은 비율로 변하지 않는다.
+  // 구성금액을 직접 받고, 합계가 총액과 맞는지 확인한다.
+  // 분해가 한 줄뿐이면 나눌 것이 없으니 총액을 그대로 쓴다.
+  const nextSplits: { kind: SplitKind; amount: Prisma.Decimal }[] = []
+  if (receipt.splits.length === 1) {
+    nextSplits.push({ kind: receipt.splits[0].splitKind, amount })
+  } else {
+    for (const s of receipt.splits) {
+      const v = dec(formData.get(`split_${s.splitKind}`))
+      if (!v) {
+        return {
+          error: '분해 금액을 모두 넣어 주세요.'
+            + ` (${receipt.splits.map((x) => SPLIT_KIND_LABEL[x.splitKind]).join(' · ')})`,
+        }
+      }
+      nextSplits.push({ kind: s.splitKind, amount: v })
+    }
+    const sum = nextSplits.reduce((a, b) => a.plus(b.amount), new Prisma.Decimal(0))
+    if (!sum.equals(amount)) {
+      return { error: `분해 합계(${sum.toString()})가 총 입금액(${amount.toString()})과 다릅니다.` }
+    }
+  }
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -690,15 +737,7 @@ export async function updateReceiptAmount(_prev: ActionState, formData: FormData
         ctx)
 
       await tx.receiptSplit.deleteMany({ where: { receiptId } })
-      let assigned = new Prisma.Decimal(0)
-      const scaled = receipt.splits.map((s, i) => {
-        const isLast = i === receipt.splits.length - 1
-        // 마지막 항목이 잔액을 흡수해 합계가 정확히 맞도록 한다
-        const v = isLast ? amount.minus(assigned) : roundKrw(s.amount.mul(ratio), rounding)
-        assigned = assigned.plus(v)
-        return { kind: s.splitKind, amount: v }
-      })
-      for (const s of scaled) {
+      for (const s of nextSplits) {
         await tx.receiptSplit.create({
           data: {
             receiptId, splitKind: s.kind, amount: s.amount,

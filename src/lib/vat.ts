@@ -19,13 +19,15 @@ const zero = () => new Prisma.Decimal(0)
 export interface VatStanding {
   /** 지금까지 받은 부가세 전부 */
   collectedTotal: Prisma.Decimal
-  /** 신고를 마친 기간에 속한 몫 (더 이상 예수금이 아니다) */
+  /** 신고를 마친 기간 「구간 안에서」 받은 몫 (더 이상 예수금이 아니다) */
   settled: Prisma.Decimal
   /** 아직 신고 전이라 갖고 있어야 하는 돈 */
   payable: Prisma.Decimal
   /** 신고는 했는데 아직 안 낸 금액 — 곧 나갈 돈 */
   filedUnpaid: Prisma.Decimal
-  /** 신고를 마친 마지막 기간의 종료일. 이 뒤로 받은 것이 예수금이다 */
+  /** 신고 결과가 환급인데 아직 못 받은 금액 — 통장에 없는 돈이라 자금에 더하지 않는다 */
+  receivable: Prisma.Decimal
+  /** 신고를 마친 마지막 기간의 종료일 (화면 표시용) */
   settledThrough: Date | null
 }
 
@@ -56,36 +58,54 @@ export async function vatStanding(asOf?: Date): Promise<VatStanding> {
   const collectedTotal = D(collectedAgg._sum.amountKrw ?? 0)
   const settledThrough = periods[0]?.periodTo ?? null
 
-  if (!settledThrough) {
+  if (periods.length === 0) {
     return {
       collectedTotal,
       settled: zero(),
       payable: collectedTotal,
       filedUnpaid: zero(),
+      receivable: zero(),
       settledThrough: null,
     }
   }
 
-  // 정산된 기간 안에서 받은 부가세
-  const settledAgg = await prisma.receiptSplit.aggregate({
-    where: {
-      splitKind: 'VAT',
-      receipt: { isVoid: false, receiptDate: { lte: settledThrough } },
-    },
-    _sum: { amountKrw: true },
-  })
-  const settled = D(settledAgg._sum.amountKrw ?? 0)
+  // 신고를 마친 「각 기간의 실제 구간」 안에서 받은 부가세만 정산으로 본다.
+  // 마지막 기간 종료일까지 몽땅 정산으로 치면,
+  // 신고기간 사이에 빈 구간(예: 분기 신고에서 빠진 달)이 있을 때
+  // 아직 신고도 안 한 부가세가 회사 돈으로 둔갑한다.
+  let settled = zero()
+  for (const p of periods) {
+    const agg = await prisma.receiptSplit.aggregate({
+      where: {
+        splitKind: 'VAT',
+        receipt: {
+          isVoid: false,
+          receiptDate: { gte: p.periodFrom, lte: p.periodTo },
+        },
+      },
+      _sum: { amountKrw: true },
+    })
+    settled = settled.plus(D(agg._sum.amountKrw ?? 0))
+  }
 
-  const filedUnpaid = periods
-    .filter((p) => p.status === VatPeriodStatus.FILED)
-    .reduce((s, p) => s.plus(D(p.salesVat).minus(D(p.purchaseVat))), zero())
+  // 신고했지만 아직 주고받지 않은 금액.
+  // 낼 돈(양수)은 갖고 있어야 하고, 받을 돈(음수)은 아직 통장에 없다.
+  let filedUnpaid = zero()
+  let receivable = zero()
+  for (const p of periods.filter((x) => x.status === VatPeriodStatus.FILED)) {
+    const net = D(p.salesVat).minus(D(p.purchaseVat))
+    if (net.gt(0)) filedUnpaid = filedUnpaid.plus(net)
+    else receivable = receivable.plus(net.negated())
+  }
 
   return {
     collectedTotal,
     settled,
-    // 정산 뒤로 받은 것 + 신고했지만 아직 안 낸 것 = 갖고 있어야 할 돈
+    // 신고 안 한 구간에서 받은 것 + 신고했지만 아직 안 낸 것 = 갖고 있어야 할 돈.
+    // 환급받을 돈은 여기 더하지 않는다 — 아직 통장에 없는 돈이다.
     payable: collectedTotal.minus(settled).plus(filedUnpaid),
     filedUnpaid,
+    receivable,
     settledThrough,
   }
 }

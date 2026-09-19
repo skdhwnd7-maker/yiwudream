@@ -174,3 +174,24 @@ export async function findDepositAnomalies(): Promise<DepositAnomaly[]> {
   }
   return out.sort((a, b) => a.balance.comparedTo(b.balance))
 }
+
+/**
+ * 주문 잠금 — 같은 주문을 동시에 건드리는 요청을 줄 세운다.
+ *
+ * 세금계산서 발행 버튼을 두 번 누르면, 두 요청이 모두
+ * "아직 계산서가 없다" 를 읽고 각각 한 장씩 만들 수 있다.
+ * 트랜잭션 안에서 이 잠금을 먼저 잡고 다시 확인하면 그럴 일이 없다.
+ *
+ * 4839 는 예치금 잠금(4837)과 겹치지 않게 고른 번호다.
+ */
+const ORDER_LOCK_NS = 4839
+
+export async function lockOrders(
+  tx: Prisma.TransactionClient,
+  orderIds: bigint[],
+): Promise<void> {
+  // 순서를 고정한다. 두 요청이 반대 순서로 잡으면 서로를 기다린다.
+  for (const id of [...orderIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ORDER_LOCK_NS}::int, ${Number(id)}::int)`
+  }
+}

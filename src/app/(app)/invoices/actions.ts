@@ -4,6 +4,7 @@ import { revalidate } from '@/lib/revalidate'
 import { redirect } from 'next/navigation'
 import { Prisma, InvoiceStatus, AuditAction, type VatMode } from '@prisma/client'
 import { prisma } from '@/lib/db'
+import { lockOrders } from '@/lib/deposit'
 import { requirePermission, auditContext } from '@/lib/session-guard'
 import { logCreate, logUpdate, logAction, AuditReasonRequiredError } from '@/lib/audit'
 import { nextDocNo } from '@/lib/numbering'
@@ -138,6 +139,24 @@ export async function createInvoice(_prev: ActionState, formData: FormData): Pro
   try {
     await prisma.$transaction(async (tx) => {
       const ctx = await auditContext(user, isManual ? targetReason : undefined)
+
+      // 발행 버튼을 두 번 누르면 두 요청이 모두 「아직 계산서 없음」 을 읽고
+      // 각각 한 장씩 만들 수 있다. 주문을 잠그고 트랜잭션 안에서 다시 확인한다.
+      await lockOrders(tx, orderIds)
+      const dup = await tx.invoiceOrder.findFirst({
+        where: {
+          orderId: { in: orderIds },
+          invoice: { isVoid: false, issueStatus: { not: InvoiceStatus.CANCELLED } },
+        },
+        include: { invoice: { select: { invoiceNo: true } }, order: { select: { orderNo: true } } },
+      })
+      if (dup) {
+        throw new Error(
+          `${dup.order.orderNo} 은 이미 ${dup.invoice.invoiceNo} 에 들어가 있습니다.`
+          + ' 화면을 새로 고쳐 확인해 주세요.',
+        )
+      }
+
       const invoiceNo = await nextDocNo(tx, 'TX', issueDate ?? new Date())
 
       const inv = await tx.invoice.create({

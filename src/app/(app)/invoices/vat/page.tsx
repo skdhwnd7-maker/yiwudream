@@ -62,6 +62,13 @@ export default async function VatPage() {
             곧 나갈 돈이라 사용가능 자금에서 빼 두었습니다.
           </div>
         )}
+        {standing.receivable.gt(0) && (
+          <div className="card-foot text-xs text-ink-2">
+            환급받을 금액이 {fmtKrw(standing.receivable)}원 있습니다.
+            아직 통장에 들어오지 않은 돈이라 사용가능 자금에 더하지 않았습니다.
+            실제로 받으시면 납부 처리에서 <b>음수</b>로 넣고 입금 계좌를 고르세요.
+          </div>
+        )}
       </div>
 
       <NewPeriodForm />

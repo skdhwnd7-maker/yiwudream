@@ -18,7 +18,7 @@ const SCRIPTS = [
   'verify-phase5.ts',
   'verify-phase6.ts',
   'verify-phase7.ts',
-  'verify-audit.ts',
+  'verify-audit.ts', 'verify-audit2.ts',
 ]
 
 function main() {

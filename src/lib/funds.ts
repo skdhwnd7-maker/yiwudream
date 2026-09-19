@@ -6,7 +6,7 @@
  * 핵심: 통장에 있는 돈이 전부 회사 돈이 아니다.
  *   계좌잔액 − 고객예치금 − 부가세예수금 − 미지급비용 = 실제 사용가능 자금
  */
-import { Prisma, type Entity } from '@prisma/client'
+import { Prisma, type Entity, ReceiptSource } from '@prisma/client'
 import { prisma } from './db'
 import { D } from './money'
 
@@ -106,8 +106,14 @@ export async function accountBalances(asOf?: Date): Promise<AccountBalance[]> {
   const out: AccountBalance[] = []
   for (const a of accounts) {
     const [inflow, outflow, remitOut, remitIn, transferOut, transferIn] = await Promise.all([
+      // DIRECT 만 실제 통장에 들어온 돈이다.
+      // FROM_DEPOSIT 은 예전에 받아 둔 예치금을 주문에 충당한 것이라
+      // 매출로는 잡히지만 통장에 새로 들어온 현금이 아니다. 여기 더하면 두 번 센다.
       prisma.receipt.aggregate({
-        where: { accountId: a.id, isVoid: false, ...(dateFilter ? { receiptDate: dateFilter } : {}) },
+        where: {
+          accountId: a.id, isVoid: false, source: ReceiptSource.DIRECT,
+          ...(dateFilter ? { receiptDate: dateFilter } : {}),
+        },
         _sum: { amount: true },
       }),
       // 송금수수료는 BANK_FEE 지출 전표로 남아 여기 이미 포함된다.
@@ -133,7 +139,8 @@ export async function accountBalances(asOf?: Date): Promise<AccountBalance[]> {
       }),
       prisma.internalTransfer.aggregate({
         where: { fromAccountId: a.id, isVoid: false, ...(dateFilter ? { transferDate: dateFilter } : {}) },
-        _sum: { krwAmount: true, bankFee: true },
+        // bankFee 는 BANK_FEE 지출 전표로 빠진다. 여기서 또 빼면 두 번 빠진다.
+        _sum: { krwAmount: true },
       }),
       prisma.internalTransfer.aggregate({
         where: { toAccountId: a.id, isVoid: false, ...(dateFilter ? { transferDate: dateFilter } : {}) },
@@ -150,7 +157,6 @@ export async function accountBalances(asOf?: Date): Promise<AccountBalance[]> {
       bal = bal
         .minus(remitOut._sum.krwAmount ?? 0)
         .minus(transferOut._sum.krwAmount ?? 0)
-        .minus(transferOut._sum.bankFee ?? 0)
     } else if (a.currency === 'CNY') {
       bal = bal
         .plus(remitIn._sum.cnyArrivalAmount ?? 0)

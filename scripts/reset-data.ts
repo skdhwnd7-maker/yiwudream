@@ -18,11 +18,23 @@ import { spawnSync } from 'node:child_process'
 import { PrismaClient } from '@prisma/client'
 
 const MARK = 'data_reset_token'
+/** 운영에서 자료를 비우려면 이 문구를 RESET_DATA_CONFIRM 에 그대로 넣어야 한다 */
+const CONFIRM = 'DELETE-ALL-LEDGER-DATA'
 const prisma = new PrismaClient()
 
 async function main(): Promise<void> {
   const token = (process.env.RESET_DATA ?? '').trim()
   if (!token) return
+
+  // 운영에서는 값 하나로 장부가 날아가면 안 된다.
+  // RESET_DATA 를 실수로 건드려도, 확인 문구가 따로 없으면 아무 일도 일어나지 않는다.
+  if (process.env.NODE_ENV === 'production') {
+    if ((process.env.RESET_DATA_CONFIRM ?? '').trim() !== CONFIRM) {
+      console.log('        RESET_DATA 가 있지만 확인값이 없어 건너뜁니다.')
+      console.log(`        정말 비우시려면 RESET_DATA_CONFIRM=${CONFIRM} 을 함께 넣으세요.`)
+      return
+    }
+  }
 
   const done = await prisma.setting.findUnique({ where: { key: MARK } })
   if (done?.value === token) {
