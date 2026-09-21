@@ -113,6 +113,8 @@ export async function createRemittance(_prev: ActionState, formData: FormData): 
   const fxUsdCny = dec(formData.get('fxRateUsdCny'))
   const bankFee = dec(formData.get('bankFeeKrw')) ?? new Prisma.Decimal(0)
   const memo = String(formData.get('memo') ?? '').trim() || null
+  // 화면이 폼을 그릴 때 만든 열쇠. 같은 폼에서 온 요청은 같은 값이다.
+  const idemKey = String(formData.get('idempotencyKey') ?? '').trim().slice(0, 64) || null
   const statusRaw = String(formData.get('status') ?? 'SENT')
   const status = (statusRaw in RemitStatus ? statusRaw : 'SENT') as RemitStatus
   // 취소 상태로 새로 만들 수는 없다. 취소는 만들어진 전표를 되돌리는 행위다
@@ -169,7 +171,11 @@ export async function createRemittance(_prev: ActionState, formData: FormData): 
           remitNo, remitDate, fromAccountId, toAccountId,
           krwAmount, usdAmount, cnyArrivalAmount: cnyArrival,
           fxRateKrwUsd: fxKrwUsd, fxRateUsdCny: fxUsdCny, fxRateKrwCny: effectiveRate,
-          bankFeeKrw: bankFee, status: RemitStatus.DRAFT, memo, createdBy: BigInt(user.id),
+          bankFeeKrw: bankFee, status: RemitStatus.DRAFT, memo,
+          // 같은 폼에서 온 두 번째 요청은 여기 unique 에 걸려 통째로 되돌아간다.
+          // 예치금 차감도 수수료 전표도 만들어지기 전에 막힌다.
+          idempotencyKey: idemKey,
+          createdBy: BigInt(user.id),
         },
       })
       newId = remit.id.toString()
@@ -235,6 +241,16 @@ export async function createRemittance(_prev: ActionState, formData: FormData): 
     })
   } catch (e) {
     if (e instanceof DepositShortageError) return { error: e.message }
+    // 같은 폼에서 두 번 들어온 요청 — 첫 번째만 살고 두 번째는 여기로 온다.
+    // 사람에게는 오류가 아니라 「이미 저장됐다」 가 맞는 말이다.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+      const target = String((e.meta as { target?: unknown })?.target ?? '')
+      if (target.includes('idempotency')) {
+        revalidate('/remittances')
+        revalidate('/funds')
+        return { ok: '이미 등록된 송금입니다. 목록에서 확인해 주세요.' }
+      }
+    }
     return { error: e instanceof Error ? e.message : '저장 중 오류가 발생했습니다.' }
   }
 
@@ -479,9 +495,18 @@ export async function createInternalTransfer(_prev: ActionState, formData: FormD
   if (!fromAccount) return { error: '보낸 계좌를 고르세요.' }
   if (!toAccount) return { error: '받은 계좌를 고르세요.' }
   if (fromAccount.entity !== Entity.KR) return { error: '보낸 계좌는 한국법인 계좌여야 합니다.' }
+  // 지금의 내부 자금이동은 「한국 원화 → 중국 위안」 한 가지다.
+  // 한국 USD·CNY 계좌에서 보내는 건은 환산·수수료 처리가 달라서
+  // 이 기능에 섞으면 잔액이 맞지 않는다. 필요해지면 별도 기능으로 만든다.
+  if (fromAccount.currency !== Currency.KRW) {
+    return {
+      error: `${fromAccount.name} 은 원화 계좌가 아닙니다.`
+        + ' 내부 자금이동은 한국 원화 계좌에서만 보낼 수 있습니다.',
+    }
+  }
   if (toAccount.entity !== Entity.CN) return { error: '받은 계좌는 중국법인 계좌여야 합니다.' }
   if (toAccount.currency !== Currency.CNY) return { error: '받은 계좌는 위안(CNY) 계좌여야 합니다.' }
-  if (fromAccount.currency === Currency.KRW && (!krwAmount || krwAmount.lte(0))) {
+  if (!krwAmount || krwAmount.lte(0)) {
     return {
       error: `${fromAccount.name} 은 원화 계좌입니다. 통장에서 실제로 나간 원화 금액을 넣으세요.`
         + ' 넣지 않으면 한국 통장은 그대로인데 중국 통장만 늘어납니다.',

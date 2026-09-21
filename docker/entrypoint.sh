@@ -44,25 +44,35 @@ fi
 # 2) 표를 만든다 — 운영에서는 마이그레이션만 쓴다.
 #    db push --accept-data-loss 는 스키마가 어긋나면 열을 말없이 지운다.
 #    장부를 담은 DB 에 그런 명령을 돌릴 수는 없다.
+#
+#    0_init 은 「이미 돌고 있던 DB 에 있던 표들」 이라는 뜻의 기준선이다.
+#    그 뒤에 더한 것(1_login_attempts …)만 실제로 적용된다.
+#    - 새 DB      : 0_init 부터 전부 실행된다
+#    - 기존 DB    : 0_init 은 「이미 있음」 으로 표시만 하고, 그 뒤 것만 실행된다
+#    어느 쪽이든 기존 자료를 지우는 명령은 돌지 않는다.
 echo "  [2/6] 표 만들기"
 PSQL="psql $PG_URL -tAc"
-HAS_MIGRATIONS="$($PSQL "SELECT to_regclass('public._prisma_migrations') IS NOT NULL" 2>/dev/null || echo f)"
 HAS_TABLES="$($PSQL "SELECT count(*) > 0 FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_prisma%'" 2>/dev/null || echo f)"
 
-if [ "$HAS_MIGRATIONS" != "t" ] && [ "$HAS_TABLES" = "t" ]; then
-  # 이미 표가 있는데 마이그레이션 기록이 없다 — db push 로 만든 기존 DB다.
-  # 첫 마이그레이션을 「이미 적용됨」 으로 표시만 하고 지우지 않는다.
-  echo "        기존 DB 를 마이그레이션 관리로 넘깁니다 (자료는 그대로)."
+if [ "$HAS_TABLES" = "t" ]; then
+  # 기준선 기록을 현재 파일 기준으로 다시 찍는다.
+  # 기록이 없을 수도(db push 로 만든 DB), 예전 파일 기준으로 남아 있을 수도 있다.
+  # 지우는 것은 「기록 한 줄」 이지 표나 자료가 아니다.
+  HAS_MIGRATIONS="$($PSQL "SELECT to_regclass('public._prisma_migrations') IS NOT NULL" 2>/dev/null || echo f)"
+  if [ "$HAS_MIGRATIONS" = "t" ]; then
+    $PSQL "DELETE FROM _prisma_migrations WHERE migration_name = '0_init'" >/dev/null 2>&1 || true
+  fi
+  echo "        기존 DB 입니다. 이미 있는 표는 그대로 두고 새 것만 더합니다."
   npx prisma migrate resolve --applied 0_init >/dev/null 2>&1 || true
 fi
 
 if ! npx prisma migrate deploy >/dev/null 2>&1; then
   echo ""
   echo "  ✗ 마이그레이션에 실패했습니다. 자료는 건드리지 않았습니다."
-  echo "    Deployments 로그를 그대로 알려 주세요."
-  npx prisma migrate deploy 2>&1 | tail -20
+  npx prisma migrate deploy 2>&1 | tail -25
   exit 1
 fi
+$PSQL "SELECT '        적용된 마이그레이션: ' || string_agg(migration_name, ', ' ORDER BY migration_name) FROM _prisma_migrations WHERE finished_at IS NOT NULL" 2>/dev/null || true
 
 # 3) 보호장치(원장 불변·예치금 마이너스 금지 등)
 echo "  [3/6] 보호장치 적용"

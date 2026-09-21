@@ -20,6 +20,14 @@ export default function RemitForm({
   rows: Row[]; krAccounts: Acc[]; cnAccounts: Acc[]
 }) {
   const [state, action] = useActionState<ActionState, FormData>(createRemittance, {})
+  // 이 폼을 연 순간 한 번 만드는 열쇠.
+  // 버튼을 두 번 눌러도 같은 값이 가므로 서버에서 두 번째 요청을 알아보고 막는다.
+  // useId 를 쓰면 페이지를 새로 열어도 같은 값이 나와 다음 송금이 막힌다 — 마운트마다 새로 만든다.
+  const [idemKey] = useState(() =>
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  )
   const [picked, setPicked] = useState<Record<string, string>>({})
   const [krwAmount, setKrwAmount] = useState('')
   const [usdAmount, setUsdAmount] = useState('')
@@ -54,6 +62,7 @@ export default function RemitForm({
 
   return (
     <form action={action} className="space-y-5">
+      <input type="hidden" name="idempotencyKey" value={`remit-${idemKey}`} />
       <header className="flex items-end justify-between gap-3">
         <div>
           <h1 className="section-title text-xl">해외송금 등록</h1>

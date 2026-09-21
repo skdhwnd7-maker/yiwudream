@@ -252,7 +252,7 @@ async function main() {
     check('④ 납부한 달의 기타 운영비', dashPay.opEtc.toString(), '0')
     check('④ 납부한 달의 운영비 합계', dashPay.opTotal.toString(), '0')
     const vatExpCount = await prisma.expense.count({
-      where: { category: { code: 'VAT_PAYMENT' }, isVoid: false, expenseDate: ymd(`${Y}-04-25`) },
+      where: { category: { code: 'VAT_PAYMENT' }, isVoid: false, memo: { contains: `V${stamp}-1` } },
     })
     check('④ 납부 전표 자체는 남아 있다 (통장에서는 빠진다)', vatExpCount, 1)
 
@@ -315,6 +315,8 @@ async function main() {
 
     const krBefore = await balOf(accCorp.id)
     const cnBefore = await balOf(accCn.id)
+    const { dashboardData: dashBefore } = await import('../src/lib/dashboard')
+    const opBefore = (await dashBefore(`${Y}-11`)).opEtc
     const okT = await runAsUser(owner, () => createInternalTransfer({}, fd({
       transferDate: `${Y}-11-02`, fromAccountId: accCorp.id.toString(),
       toAccountId: accCn.id.toString(), krwAmount: '1400000',
@@ -336,7 +338,8 @@ async function main() {
 
     const { dashboardData } = await import('../src/lib/dashboard')
     const d4 = await dashboardData(`${Y}-11`)
-    check('⑥ 손익의 기타 운영비에 수수료가 한 번만 잡힌다', d4.opEtc.toString(), '20000')
+    check('⑥ 손익의 기타 운영비에 수수료가 한 번만 잡힌다',
+      d4.opEtc.minus(opBefore).toString(), '20000')
   }
 
   // ─────────────────────────────────────────────────────────
@@ -409,6 +412,115 @@ async function main() {
       where: { orderId: order.id }, _sum: { amountKrw: true },
     })
     check('⑧ 그 주문 예치금 잔액', D(left._sum.amountKrw ?? 0).toString(), '0')
+  }
+
+  // ─────────────────────────────────────────────────────────
+  console.log('\n━━ 10. 3차: 내부 자금이동 출금계좌는 원화만 ━━')
+  {
+    const { createInternalTransfer } = await import('../src/app/(app)/remittances/actions')
+    // 한국법인 USD 계좌를 만들어 본다 — 지금 구조로는 보낼 수 없어야 한다
+    const usdAcc = await prisma.account.create({
+      data: {
+        name: `한국 USD 계좌${stamp}`, entity: Entity.KR,
+        route: Route.OTHER, currency: Currency.USD, openingBalance: D('0'),
+        createdBy: admin.id,
+      },
+    })
+    const r = await runAsUser(owner, () => createInternalTransfer({}, fd({
+      transferDate: `${Y}-11-03`, fromAccountId: usdAcc.id.toString(),
+      toAccountId: accCn.id.toString(), krwAmount: '1000000',
+      usdAmount: '1000', cnyArrivalAmount: '7000',
+    })))
+    like('⑩ 한국 USD 계좌에서 보내면 거부', (r as { error?: string }).error, '원화 계좌가 아닙니다')
+    const made = await prisma.internalTransfer.count({ where: { fromAccountId: usdAcc.id } })
+    check('⑩ 저장되지 않는다', made, 0)
+    await prisma.account.delete({ where: { id: usdAcc.id } })
+  }
+
+  // ─────────────────────────────────────────────────────────
+  console.log('\n━━ 11. 3차: 신규 송금 더블클릭 ━━')
+  {
+    const { createRemittance } = await import('../src/app/(app)/remittances/actions')
+    const dtSite = await prisma.dealType.findFirstOrThrow({ where: { defaultRoute: Route.SITE } })
+
+    // 송금할 예치금을 만든다
+    const order = await prisma.order.create({
+      data: {
+        orderNo: `D${stamp}`, partnerId: partner.id, route: Route.SITE,
+        dealTypeId: dtSite.id, accountingClass: '용역매출', entity: Entity.KR,
+        settlementCurrency: Currency.KRW, orderDate: ymd(`${Y}-12-01`),
+        invoiceStatus: InvoiceStatus.NONE, createdBy: admin.id,
+      },
+    })
+    const rc = await prisma.receipt.create({
+      data: {
+        receiptNo: `DR${stamp}`, orderId: order.id, partnerId: partner.id,
+        accountId: accSite.id, route: Route.SITE, entity: Entity.KR,
+        receiptDate: ymd(`${Y}-12-01`), currency: Currency.KRW,
+        amount: D('800000'), amountKrw: D('800000'), createdBy: admin.id,
+      },
+    })
+    await prisma.$transaction(async (tx) => {
+      await tx.receiptSplit.create({
+        data: { receiptId: rc.id, splitKind: SplitKind.DEPOSIT_GOODS, amount: D('800000'), amountKrw: D('800000') },
+      })
+      await tx.depositLedger.create({
+        data: {
+          partnerId: partner.id, depositKind: DepositKind.GOODS_FUND,
+          movement: DepositMovement.IN_RECEIPT, amountKrw: D('800000'),
+          movementDate: ymd(`${Y}-12-01`), refTable: 'receipts', refId: rc.id,
+          orderId: order.id, createdBy: admin.id,
+        },
+      })
+    })
+
+    // 같은 폼에서 두 번 — 열쇠가 같다 (버튼 더블클릭)
+    const key = `remit-double-${stamp}`
+    const body = {
+      remitDate: `${Y}-12-02`, fromAccountId: accCorp.id.toString(),
+      toAccountId: accCn.id.toString(), krwAmount: '800000',
+      cnyArrivalAmount: '4000', bankFeeKrw: '18000', status: 'SENT',
+      allocOrderId: [order.id.toString()], allocKrw: ['800000'],
+      idempotencyKey: key,
+    }
+    const both = await Promise.allSettled([
+      runAsUser(owner, () => call(() => createRemittance({}, fd(body)))),
+      runAsUser(owner, () => call(() => createRemittance({}, fd(body)))),
+    ])
+    const errs = both.map((r) => r.status === 'fulfilled'
+      ? (r.value as { error?: string }).error ?? '' : '거부')
+    ok('⑪ 두 요청 모두 오류 없이 끝난다', errs.every((e) => !e), errs.join(' | '))
+
+    const made = await prisma.remittance.findMany({
+      where: { allocs: { some: { orderId: order.id } }, isVoid: false },
+    })
+    check('⑪ 송금 전표는 한 건만 생긴다', made.length, 1)
+
+    const feeCount = made.length === 1
+      ? await prisma.expense.count({
+          where: { memo: { contains: `${made[0].remitNo} 송금수수료` }, isVoid: false },
+        })
+      : -1
+    check('⑪ 송금수수료 전표도 한 장만', feeCount, 1)
+
+    const outs = await prisma.depositLedger.count({
+      where: { orderId: order.id, movement: DepositMovement.USE_REMIT },
+    })
+    check('⑪ 예치금이 한 번만 빠진다', outs, 1)
+
+    const left = await prisma.depositLedger.aggregate({
+      where: { orderId: order.id }, _sum: { amountKrw: true },
+    })
+    check('⑪ 그 주문 예치금 잔액', D(left._sum.amountKrw ?? 0).toString(), '0')
+
+    // 열쇠가 다르면 (화면을 새로 열었다면) 두 번째 송금도 만들 수 있어야 한다
+    const second = await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      ...body, krwAmount: '1', cnyArrivalAmount: '1', bankFeeKrw: '0',
+      allocKrw: ['1'], idempotencyKey: `${key}-2`, status: 'DRAFT',
+    }))))
+    ok('⑪ 열쇠가 다르면 새 송금은 정상 등록된다',
+      'redirected' in (second as object) || !(second as { error?: string }).error,
+      (second as { error?: string }).error ?? '')
   }
 
   // ─────────────────────────────────────────────────────────

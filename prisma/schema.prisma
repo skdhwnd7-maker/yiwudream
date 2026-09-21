@@ -550,6 +550,9 @@ model ExpenseAllocation {
 model Remittance {
   id               BigInt      @id @default(autoincrement())
   remitNo          String      @unique @map("remit_no") @db.VarChar(20)
+  /// 같은 화면에서 만든 요청을 한 건으로 묶는 열쇠.
+  /// 버튼을 두 번 눌러 두 요청이 동시에 들어와도 두 번째는 여기서 막힌다.
+  idempotencyKey String? @unique @map("idempotency_key") @db.VarChar(64)
   remitDate        DateTime    @map("remit_date") @db.Date
   fromAccountId    BigInt      @map("from_account_id")
   toAccountId      BigInt      @map("to_account_id")
