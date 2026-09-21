@@ -128,6 +128,28 @@ export async function createRemittance(_prev: ActionState, formData: FormData): 
   if (!remitDate) return { error: '송금일을 입력하세요.' }
   if (!fromAccountId || !toAccountId) return { error: '출금 계좌와 수취 계좌를 선택하세요.' }
   if (!krwAmount || krwAmount.lte(0)) return { error: 'KRW 송금액을 올바르게 입력하세요.' }
+  // 정상 화면에서 온 요청이면 열쇠가 반드시 실려 있다.
+  // 없으면 화면을 거치지 않은 요청이거나 오래된 화면이다 — 중복을 막을 길이 없으니 받지 않는다.
+  if (!idemKey) {
+    return { error: '요청 정보가 올바르지 않습니다. 화면을 새로 고친 뒤 다시 등록해 주세요.' }
+  }
+
+  // 이 송금은 「한국 원화 → 중국 위안」 한 가지다.
+  // 화면에서만 걸러 두면 오래된 화면이나 직접 만든 요청으로 엉뚱한 계좌가 들어온다.
+  const [fromAcc, toAcc] = await Promise.all([
+    prisma.account.findUnique({ where: { id: fromAccountId } }),
+    prisma.account.findUnique({ where: { id: toAccountId } }),
+  ])
+  if (!fromAcc) return { error: '출금 계좌를 찾을 수 없습니다.' }
+  if (!toAcc) return { error: '수취 계좌를 찾을 수 없습니다.' }
+  if (!fromAcc.isActive) return { error: `${fromAcc.name} 은 중지된 계좌입니다.` }
+  if (!toAcc.isActive) return { error: `${toAcc.name} 은 중지된 계좌입니다.` }
+  if (fromAcc.entity !== Entity.KR || fromAcc.currency !== Currency.KRW) {
+    return { error: `${fromAcc.name} 에서는 보낼 수 없습니다. 출금은 한국법인 원화 계좌만 됩니다.` }
+  }
+  if (toAcc.entity !== Entity.CN || toAcc.currency !== Currency.CNY) {
+    return { error: `${toAcc.name} 으로는 받을 수 없습니다. 수취는 중국법인 위안 계좌만 됩니다.` }
+  }
 
   // 배분
   const orderIds = formData.getAll('allocOrderId').map(String).filter(Boolean)

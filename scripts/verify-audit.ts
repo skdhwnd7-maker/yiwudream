@@ -64,6 +64,8 @@ async function call<T>(fn: () => Promise<T>): Promise<T | { redirected: true }> 
 }
 
 const stamp = Date.now() % 1e6
+/** 검증이 만드는 송금마다 다른 열쇠를 준다 — 화면이 폼마다 새로 만드는 것과 같다 */
+let remitSeq = 0
 let owner: SessionUser
 
 async function main() {
@@ -128,6 +130,7 @@ async function main() {
     const before = (await accountBalances()).find((a) => a.id === accKr.id.toString())!.balance
 
     const r = await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      idempotencyKey: `auto-${stamp}-${++remitSeq}`,
       remitDate: new Date().toISOString().slice(0, 10),
       fromAccountId: accKr.id.toString(), toAccountId: accCn.id.toString(),
       krwAmount: '1000000', cnyArrivalAmount: '5000', bankFeeKrw: '15000',
@@ -153,6 +156,7 @@ async function main() {
 
     // 600,000 송금 — 통과해야 한다
     const ok = await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      idempotencyKey: `auto-${stamp}-${++remitSeq}`,
       remitDate: new Date().toISOString().slice(0, 10),
       fromAccountId: accKr.id.toString(), toAccountId: accCn.id.toString(),
       krwAmount: '600000', cnyArrivalAmount: '3000', status: 'SENT',
@@ -162,6 +166,7 @@ async function main() {
 
     // 남은 400,000 인데 500,000 송금 — 반드시 거절
     const bad = await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      idempotencyKey: `auto-${stamp}-${++remitSeq}`,
       remitDate: new Date().toISOString().slice(0, 10),
       fromAccountId: accKr.id.toString(), toAccountId: accCn.id.toString(),
       krwAmount: '500000', cnyArrivalAmount: '2500', status: 'SENT',
@@ -210,6 +215,7 @@ async function main() {
     const balBefore = (await accountBalances()).find((a) => a.id === accKr.id.toString())!.balance
 
     await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      idempotencyKey: `auto-${stamp}-${++remitSeq}`,
       remitDate: new Date().toISOString().slice(0, 10),
       fromAccountId: accKr.id.toString(), toAccountId: accCn.id.toString(),
       krwAmount: '700000', cnyArrivalAmount: '3500', bankFeeKrw: '10000', status: 'DRAFT',
@@ -246,6 +252,7 @@ async function main() {
 
     // 취소로 새로 만들 수 없다
     const cancelled = await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      idempotencyKey: `auto-${stamp}-${++remitSeq}`,
       remitDate: new Date().toISOString().slice(0, 10),
       fromAccountId: accKr.id.toString(), toAccountId: accCn.id.toString(),
       krwAmount: '100000', status: 'CANCELLED',
@@ -272,6 +279,7 @@ async function main() {
   {
     const order = await makeDepositOrder('500000', 's2')
     await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      idempotencyKey: `auto-${stamp}-${++remitSeq}`,
       remitDate: new Date().toISOString().slice(0, 10),
       fromAccountId: accKr.id.toString(), toAccountId: accCn.id.toString(),
       krwAmount: '500000', status: 'DRAFT',
@@ -296,6 +304,7 @@ async function main() {
     const o2 = await makeDepositOrder('400000', 'a2')
 
     await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      idempotencyKey: `auto-${stamp}-${++remitSeq}`,
       remitDate: new Date().toISOString().slice(0, 10),
       fromAccountId: accKr.id.toString(), toAccountId: accCn.id.toString(),
       krwAmount: '1000000', cnyArrivalAmount: '5000', status: 'SENT',

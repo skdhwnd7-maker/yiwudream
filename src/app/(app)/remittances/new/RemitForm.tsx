@@ -180,10 +180,10 @@ export default function RemitForm({
             <input name="bankFeeKrw" inputMode="decimal" className="num" placeholder="0" />
           </Field>
 
-          <Field label="상태" name="status">
+          {/* 도착확인은 보낸 뒤에 하는 절차다. 목록의 「도착 확인」 버튼으로만 간다 */}
+          <Field label="상태" name="status" hint="도착확인은 보낸 뒤 목록에서 누르시면 됩니다.">
             <select name="status" defaultValue="SENT">
               <option value="SENT">송금완료</option>
-              <option value="ARRIVED">도착확인</option>
               <option value="DRAFT">작성중</option>
             </select>
           </Field>

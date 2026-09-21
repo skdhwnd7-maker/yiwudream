@@ -17,7 +17,17 @@ export default async function NewRemittancePage({
 
   const [pending, accounts] = await Promise.all([
     listRemitPending(false),
-    prisma.account.findMany({ where: { isActive: true }, orderBy: [{ entity: 'asc' }, { name: 'asc' }] }),
+    // 보낼 수 있는 계좌만 보여 준다 — 한국 원화에서 나가 중국 위안으로 들어온다
+    prisma.account.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          { entity: 'KR', currency: 'KRW' },
+          { entity: 'CN', currency: 'CNY' },
+        ],
+      },
+      orderBy: [{ entity: 'asc' }, { name: 'asc' }],
+    }),
   ])
 
   const rows = sp.partner ? pending.filter((p) => p.partnerId === sp.partner) : pending

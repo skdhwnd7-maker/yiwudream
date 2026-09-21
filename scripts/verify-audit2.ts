@@ -53,6 +53,8 @@ async function withLedgerTriggersOff<T>(fn: () => Promise<T>): Promise<T> {
 const ymd = (s: string) => new Date(`${s}T00:00:00Z`)
 
 const stamp = Date.now() % 1e6
+/** 검증이 만드는 송금마다 다른 열쇠를 준다 — 화면이 폼마다 새로 만드는 것과 같다 */
+let remitSeq = 0
 /** 실행마다 다른 연도를 쓴다. 이전 실행이 남긴 신고기간과 겹치면 저장이 막힌다 */
 const Y = 2080 + (stamp % 15)
 let owner: SessionUser
@@ -380,6 +382,7 @@ async function main() {
     })
 
     await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      idempotencyKey: `auto-${stamp}-${++remitSeq}`,
       remitDate: '2026-04-03', fromAccountId: accCorp.id.toString(),
       toAccountId: accCn.id.toString(), krwAmount: '500000',
       cnyArrivalAmount: '2500', bankFeeKrw: '15000', status: 'DRAFT',
@@ -435,6 +438,63 @@ async function main() {
     const made = await prisma.internalTransfer.count({ where: { fromAccountId: usdAcc.id } })
     check('⑩ 저장되지 않는다', made, 0)
     await prisma.account.delete({ where: { id: usdAcc.id } })
+  }
+
+  // ─────────────────────────────────────────────────────────
+  console.log('\n━━ 12. 4차: 송금 계좌는 한국 원화 → 중국 위안만 ━━')
+  {
+    const { createRemittance } = await import('../src/app/(app)/remittances/actions')
+    const mk = (name: string, entity: Entity, currency: Currency, active = true) =>
+      prisma.account.create({
+        data: {
+          name: `${name}${stamp}`, entity, route: Route.OTHER, currency,
+          openingBalance: D('0'), isActive: active, createdBy: admin.id,
+        },
+      })
+    const krUsd = await mk('한국USD', Entity.KR, Currency.USD)
+    const cnUsd = await mk('중국USD', Entity.CN, Currency.USD)
+    const krOff = await mk('중지된한국원화', Entity.KR, Currency.KRW, false)
+
+    const base = {
+      remitDate: `${Y}-12-20`, krwAmount: '100000', cnyArrivalAmount: '500',
+      status: 'DRAFT', allocOrderId: [] as string[], allocKrw: [] as string[],
+    }
+    const cases: [string, Record<string, string | string[]>, string][] = [
+      ['⑫ 한국 USD 계좌에서 보내면 거부',
+        { fromAccountId: krUsd.id.toString(), toAccountId: accCn.id.toString() },
+        '한국법인 원화 계좌만'],
+      ['⑫ 중국 USD 계좌로 받으면 거부',
+        { fromAccountId: accCorp.id.toString(), toAccountId: cnUsd.id.toString() },
+        '중국법인 위안 계좌만'],
+      ['⑫ 중지된 계좌는 쓸 수 없다',
+        { fromAccountId: krOff.id.toString(), toAccountId: accCn.id.toString() },
+        '중지된 계좌'],
+    ]
+    for (const [label, over, needle] of cases) {
+      const r = await runAsUser(owner, () => call(() => createRemittance({}, fd({
+        ...base, ...over, idempotencyKey: `acc-${stamp}-${++remitSeq}`,
+      }))))
+      like(label, (r as { error?: string }).error, needle)
+    }
+    const leaked = await prisma.remittance.count({
+      where: { OR: [{ fromAccountId: { in: [krUsd.id, krOff.id] } }, { toAccountId: cnUsd.id }] },
+    })
+    check('⑫ 어느 경우도 저장되지 않는다', leaked, 0)
+
+    // 열쇠가 없으면 받지 않는다
+    const noKey = await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      ...base, fromAccountId: accCorp.id.toString(), toAccountId: accCn.id.toString(),
+    }))))
+    like('⑫ 열쇠 없는 요청은 거부', (noKey as { error?: string }).error, '화면을 새로 고친')
+
+    // 도착확인 상태로는 새로 만들 수 없다
+    const arrived = await runAsUser(owner, () => call(() => createRemittance({}, fd({
+      ...base, status: 'ARRIVED', fromAccountId: accCorp.id.toString(),
+      toAccountId: accCn.id.toString(), idempotencyKey: `arr-${stamp}-${++remitSeq}`,
+    }))))
+    like('⑫ 도착확인 상태로 새로 만들 수 없다', (arrived as { error?: string }).error, '도착확인은 송금한 뒤')
+
+    for (const a of [krUsd, cnUsd, krOff]) await prisma.account.delete({ where: { id: a.id } })
   }
 
   // ─────────────────────────────────────────────────────────

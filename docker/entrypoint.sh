@@ -45,31 +45,64 @@ fi
 #    db push --accept-data-loss 는 스키마가 어긋나면 열을 말없이 지운다.
 #    장부를 담은 DB 에 그런 명령을 돌릴 수는 없다.
 #
-#    0_init 은 「이미 돌고 있던 DB 에 있던 표들」 이라는 뜻의 기준선이다.
-#    그 뒤에 더한 것(1_login_attempts …)만 실제로 적용된다.
-#    - 새 DB      : 0_init 부터 전부 실행된다
-#    - 기존 DB    : 0_init 은 「이미 있음」 으로 표시만 하고, 그 뒤 것만 실행된다
-#    어느 쪽이든 기존 자료를 지우는 명령은 돌지 않는다.
+#    0_init 은 「db push 로 만들어 쓰던 DB 에 이미 있던 표들」 이라는 뜻의 기준선이다.
+#    - 새 DB   : 0_init 부터 차례로 전부 실행된다
+#    - 기존 DB : 기록이 아예 없을 때 한 번만 「이미 있음」 으로 표시하고,
+#                그 뒤 마이그레이션만 실제로 실행된다
+#    평소에는 migrate deploy 만 돈다. 기록을 지우는 일은 하지 않는다 —
+#    매번 지우면 0_init 파일이 바뀌어도 Prisma 가 알아채지 못한다.
 echo "  [2/6] 표 만들기"
 PSQL="psql $PG_URL -tAc"
 HAS_TABLES="$($PSQL "SELECT count(*) > 0 FROM pg_tables WHERE schemaname='public' AND tablename NOT LIKE '\_prisma%'" 2>/dev/null || echo f)"
+HAS_MIGRATIONS="$($PSQL "SELECT to_regclass('public._prisma_migrations') IS NOT NULL" 2>/dev/null || echo f)"
 
-if [ "$HAS_TABLES" = "t" ]; then
-  # 기준선 기록을 현재 파일 기준으로 다시 찍는다.
-  # 기록이 없을 수도(db push 로 만든 DB), 예전 파일 기준으로 남아 있을 수도 있다.
-  # 지우는 것은 「기록 한 줄」 이지 표나 자료가 아니다.
-  HAS_MIGRATIONS="$($PSQL "SELECT to_regclass('public._prisma_migrations') IS NOT NULL" 2>/dev/null || echo f)"
-  if [ "$HAS_MIGRATIONS" = "t" ]; then
-    $PSQL "DELETE FROM _prisma_migrations WHERE migration_name = '0_init'" >/dev/null 2>&1 || true
-  fi
-  echo "        기존 DB 입니다. 이미 있는 표는 그대로 두고 새 것만 더합니다."
+if [ "$HAS_TABLES" = "t" ] && [ "$HAS_MIGRATIONS" != "t" ]; then
+  # 표는 있는데 마이그레이션 기록이 없다 — db push 로 만들어 쓰던 DB 다.
+  # 기준선을 한 번만 찍는다. 다음 기동부터는 기록이 있으므로 여기 들어오지 않는다.
+  echo "        기존 DB 입니다. 기준선을 한 번 찍고 새 것만 더합니다."
   npx prisma migrate resolve --applied 0_init >/dev/null 2>&1 || true
+fi
+
+# 기준선 기록이 예전 파일 기준으로 남아 깨진 경우에만 쓰는 일회용 복구.
+# 넣지 않으면 절대 돌지 않는다. 쓰고 나면 값을 지워야 한다.
+if [ "$BASELINE_REPAIR" = "0_init" ] && [ "$HAS_MIGRATIONS" = "t" ]; then
+  echo "        ⚠ BASELINE_REPAIR — 0_init 기록만 다시 찍습니다 (표·자료는 그대로)."
+  $PSQL "DELETE FROM _prisma_migrations WHERE migration_name = '0_init'" >/dev/null 2>&1 || true
+  npx prisma migrate resolve --applied 0_init >/dev/null 2>&1 || true
+  echo "        복구를 마쳤습니다. Railway 의 BASELINE_REPAIR 값을 지워 주세요."
+fi
+
+# 이미 적용된 마이그레이션 파일이 바뀌지 않았는지 직접 대조한다.
+# prisma migrate deploy 는 이 검사를 하지 않는다 (개발용 migrate dev 에만 있다).
+# 적용이 끝난 파일을 고치면 새 DB 와 기존 DB 의 표 모양이 달라진다 —
+# 조용히 넘어가면 나중에 「우리 DB 에만 없는 열」 같은 일이 생긴다.
+if [ "$HAS_MIGRATIONS" = "t" ]; then
+  DRIFT=""
+  for DIR in prisma/migrations/*/; do
+    NAME="$(basename "$DIR")"
+    [ -f "$DIR/migration.sql" ] || continue
+    WANT="$(sha256sum "$DIR/migration.sql" | cut -d' ' -f1)"
+    HAVE="$($PSQL "SELECT checksum FROM _prisma_migrations WHERE migration_name = '$NAME' AND finished_at IS NOT NULL" 2>/dev/null | tr -d '[:space:]')"
+    if [ -n "$HAVE" ] && [ "$HAVE" != "$WANT" ]; then
+      DRIFT="$DRIFT $NAME"
+    fi
+  done
+  if [ -n "$DRIFT" ]; then
+    echo ""
+    echo "  ✗ 이미 적용된 마이그레이션 파일이 바뀌었습니다:$DRIFT"
+    echo "    자료는 건드리지 않았습니다. 파일을 되돌리거나,"
+    echo "    기준선 기록만 다시 찍으려면 BASELINE_REPAIR=0_init 를 한 번 넣고 배포하세요."
+    exit 1
+  fi
 fi
 
 if ! npx prisma migrate deploy >/dev/null 2>&1; then
   echo ""
   echo "  ✗ 마이그레이션에 실패했습니다. 자료는 건드리지 않았습니다."
   npx prisma migrate deploy 2>&1 | tail -25
+  echo ""
+  echo "    기준선 기록이 어긋났다는 내용이면 BASELINE_REPAIR=0_init 을 한 번 넣고"
+  echo "    다시 배포한 뒤, 그 값을 지우시면 됩니다."
   exit 1
 fi
 $PSQL "SELECT '        적용된 마이그레이션: ' || string_agg(migration_name, ', ' ORDER BY migration_name) FROM _prisma_migrations WHERE finished_at IS NOT NULL" 2>/dev/null || true
